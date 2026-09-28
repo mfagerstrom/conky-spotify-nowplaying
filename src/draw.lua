@@ -157,14 +157,16 @@ local function draw_window_buttons(cr, w, s)
     end
     shade(min_cx)
     rounded_line(cr, min_cx - h, cy, min_cx + h, cy, 2 * s)
-    shade(close_cx)
-    rounded_line(cr, close_cx - h, cy - h, close_cx + h, cy + h, 2 * s)
+    shade(close_cx)                                 -- one stroke, so the crossing isn't doubled
+    cairo_move_to(cr, close_cx - h, cy - h)
+    cairo_line_to(cr, close_cx + h, cy + h)
     rounded_line(cr, close_cx - h, cy + h, close_cx + h, cy - h, 2 * s)
 end
 
 local function draw_heart(cr, h, s)
-    -- Two round lobes with lines tangent to them meeting at the point, stroked like
-    -- minimize/close (white, full on hover); filled Spotify green when liked.
+    -- Two round lobes with lines tangent to them meeting at the point, shaded like
+    -- minimize/close (white, full on hover); filled Spotify green when liked. The stroke is
+    -- thinner than theirs because a closed outline reads heavier than open lines.
     local cx, cy, w = h[1] * s, h[2] * s, h[3] * s
     local on = hovered(h[5] * s, h[6] * s, h[7] * s, h[8] * s)
     local r = w / 4                                 -- lobe radius; the lobes meet at cx
@@ -177,7 +179,7 @@ local function draw_heart(cr, h, s)
     cairo_arc(cr, cx + r, ty, r, math.pi, math.pi / 4)
     cairo_close_path(cr)
     cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND)
-    cairo_set_line_width(cr, 2 * s)
+    cairo_set_line_width(cr, 1.5 * s)
     if h[4] == 1 then
         cairo_set_source_rgba(cr, 0.114, 0.725, 0.329, 1)          -- conky.conf color1
         cairo_fill_preserve(cr)
