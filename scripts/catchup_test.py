@@ -206,20 +206,27 @@ class PushOff(Ledger):
         pr = {'url': 'https://example.test/pull/7', 'state': 'OPEN'}
         merged = dict(pr, state='MERGED', mergedAt='2026-09-28T18:29:11Z',
                       closedAt='2026-09-28T18:29:11Z', mergeCommit={'oid': 'abcdef1234567'})
-        slept = []
+        slept, views = [], []
 
         def answer(*args, timeout=None):
             if args[:2] == ('extension', 'list'):
                 return catchup.EXTENSION
             if args[:2] == ('repo', 'view'):
+                views.append(args)
                 raise RuntimeError('no answer in 10s')
             if args[:2] == ('pr', 'view'):
                 return json.dumps(merged if slept else pr)
             raise AssertionError(f'unexpected gh call: {args}')
 
+        def nap(seconds):
+            # A wait that never settles fails here instead of spinning forever.
+            if len(slept) >= 3:
+                raise AssertionError('wait did not settle on the timer')
+            slept.append(seconds)
+
         out = io.StringIO()
         with mock.patch.object(catchup, 'gh', side_effect=answer), \
-                mock.patch.object(catchup.time, 'sleep', side_effect=slept.append), \
+                mock.patch.object(catchup.time, 'sleep', side_effect=nap), \
                 mock.patch.object(catchup.signal, 'signal'), \
                 contextlib.redirect_stdout(out):
             catchup.add_pr(self.ledger, '7', 'pull request 7')
@@ -230,6 +237,8 @@ class PushOff(Ledger):
             push.stop()
             catchup.wait(self.ledger, 0)
         self.assertEqual(len(slept), 1)
+        # The Push above, the one wait starts with, and the retry on the timer.
+        self.assertEqual(len(views), 3)
         self.assertEqual(catchup.read_ledger(self.ledger)[0]['state'], 'done')
         self.assertIn('push: off, reading on the timer only', out.getvalue())
 
