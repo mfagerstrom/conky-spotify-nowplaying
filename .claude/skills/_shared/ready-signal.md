@@ -55,8 +55,8 @@ desktop-file-validate packaging/conky-spotify-nowplaying.desktop
 `desktop-file-validate` hints count as failures to fix. A change that touches
 `src/`, `bin/`, `packaging/` or `debian/` has not been checked until it has
 run: use the `run` skill, or build and install the package as in `/release`
-step 4, and say in the pull request's test plan which one was done. A change to documentation
-or skills alone owes no run.
+step 4, and say in the pull request's test plan which one was done. A change
+to documentation or skills alone owes no run.
 
 ## The mergeability check comes first
 
