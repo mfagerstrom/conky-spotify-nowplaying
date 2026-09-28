@@ -1,0 +1,7 @@
+__pycache__/
+*.log
+*.err
+# machine-specific / private state (lives in ~/.config/conky, never commit)
+position
+spotify-client-id
+spotify-token.json
