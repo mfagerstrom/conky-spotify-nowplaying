@@ -148,6 +148,41 @@ local function draw_controls(cr, c, s)
     end
 end
 
+local function draw_window_buttons(cr, w, s)
+    -- minimize (a bar) and close (a cross), white like the skip buttons, full on hover
+    local min_cx, close_cx, cy, h = w[1] * s, w[2] * s, w[3] * s, w[4] * s / 2
+    local half = (w[2] - w[1]) * s / 2              -- each button's hit area is one pitch wide
+    local function shade(cx)
+        cairo_set_source_rgba(cr, 1, 1, 1, hovered(cx - half, cy - half, cx + half, cy + half) and 1 or 0.7)
+    end
+    shade(min_cx)
+    rounded_line(cr, min_cx - h, cy, min_cx + h, cy, 2 * s)
+    shade(close_cx)
+    rounded_line(cr, close_cx - h, cy - h, close_cx + h, cy + h, 2 * s)
+    rounded_line(cr, close_cx - h, cy + h, close_cx + h, cy - h, 2 * s)
+end
+
+local function draw_heart(cr, h, s)
+    -- ♥ in Spotify green when liked; otherwise (not liked, or not known) the ♡ outline,
+    -- shaded like minimize/close: white, full on hover
+    local cx, cy, px = h[1] * s, h[2] * s, h[3] * s
+    local on = hovered(h[5] * s, h[6] * s, h[7] * s, h[8] * s)
+    local liked = h[4] == 1
+    local glyph = liked and '♥' or '♡'
+    if liked then
+        cairo_set_source_rgba(cr, 0.114, 0.725, 0.329, 1)          -- conky.conf color1
+    else
+        cairo_set_source_rgba(cr, 1, 1, 1, on and 1 or 0.7)
+    end
+    cairo_select_font_face(cr, 'DejaVu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
+    cairo_set_font_size(cr, px)
+    local ext = cairo_text_extents_t:create()
+    cairo_text_extents(cr, glyph, ext)
+    cairo_move_to(cr, cx - ext.x_bearing - ext.width / 2, cy - ext.y_bearing - ext.height / 2)
+    cairo_show_text(cr, glyph)
+    ext:destroy()
+end
+
 local function draw_bar(cr, b, s, pos)
     local x0, x1, y, fraction = b[1] * s, b[2] * s, b[3] * s, b[4]
     if b[5] and b[5] > 0 then fraction = math.min(math.max(pos / b[5], 0), 1) end
@@ -239,8 +274,13 @@ end
 function conky_draw_bar()
     if conky_window == nil then return end
     local d = load_draw()
-    if not (d.scale and d.bar) then return end
+    if not d.scale then return end
     local s = d.scale[1]
+    with_cairo(function(cr)
+        if d.window then draw_window_buttons(cr, d.window, s) end
+        if d.heart then draw_heart(cr, d.heart, s) end
+    end)
+    if not d.bar then return end
 
     -- playback clock: resync on each draw.txt update, advance locally in between
     local c = d.clock

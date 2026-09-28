@@ -8,6 +8,7 @@ which conky.conf renders with ${execpi}. It covers:
   - album art, downloaded once per track
   - the controls row: draw.lua draws the buttons and seek bar from draw.txt; click
     regions for conky-mouse.py go to regions.json
+  - the heart, minimize and close buttons at the top right (drawn by draw.lua)
   - like state (heart), via spotify_api.py; refreshed on track change and every 10 s
   - synced lyrics from LRCLIB (lrclib.net) -> lyrics.txt; draw.lua scrolls them smoothly
     (previous / current / next line). Tracks with only unsynced lyrics show none.
@@ -49,6 +50,10 @@ LABEL_FONT, HEART_FONT = 'Ubuntu Sans Bold 10', 'DejaVu Sans 15'
 TIME_FONT = 'Ubuntu Sans 11'
 CONTROL_ROW_FONT = 'DejaVu Sans 15'            # only sets the controls row's height
 SKIP_SIZE, PLAY_SIZE, CONTROL_GAP = 14, 24, 12
+WINDOW_BUTTON_SIZE = 10                       # minimize / close icons, right of the heart
+WINDOW_BUTTON_PITCH = 22                      # centre to centre, and each one's hit width
+HEART_PITCH = 25                              # heart centre to minimize centre
+HEART_PX = 20                                 # HEART_FONT (15 pt) in px, for draw.lua's cairo text
 LYRIC_ROWS = 3
 LIKE_POLL_SECONDS = 30
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
@@ -168,7 +173,7 @@ def fetch_liked(track_id):
         log(f'like check skipped (recent click): {track_id}')
         return
     if spotify_api.rate_limited_until():
-        return                                   # heart stays unknown (grey) until it lifts
+        return                                   # heart stays unknown (outline) until it lifts
     uri = None
     try:
         uri = spotify_api.current_track_uri()
@@ -305,11 +310,31 @@ def write_regions(regions):
     write_atomic(REGIONS, json.dumps(regions))
 
 
+def top_buttons():
+    """The heart, minimize and close on the top row: their centres (x), the shared centre
+    line (y), and the click regions for minimize and close."""
+    close_cx = MARGIN + TEXT_WIDTH - WINDOW_BUTTON_SIZE / 2
+    min_cx = close_cx - WINDOW_BUTTON_PITCH
+    heart_cx = min_cx - HEART_PITCH
+    # Where conky drew the heart as text: the row's baseline sits at its bottom (measured).
+    ink = ink_extents('♡', HEART_FONT)
+    cy = (MARGIN - LABEL_LIFT + line_height(LABEL_FONT, HEART_FONT) - font_ascent(HEART_FONT)
+          + ink.y + ink.height / 2)
+    half = WINDOW_BUTTON_PITCH / 2
+    regions = {
+        'minimize': [min_cx - half, cy - half, min_cx + half, cy + half],
+        'close': [close_cx - half, cy - half, close_cx + half + 12, cy + half],
+    }
+    return heart_cx, min_cx, close_cx, cy, regions
+
+
 def render():
     status = playerctl('status')
+    heart_cx, min_cx, close_cx, top_cy, top_regions = top_buttons()
+    window_line = f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}'
     if status not in ('Playing', 'Paused'):
-        write_regions({})
-        write_atomic(DRAW, '')
+        write_regions(top_regions)
+        write_atomic(DRAW, f'scale {SCALE}\n{window_line}\n')
         return "${color}${font Ubuntu Sans:size=11}Spotify not playing${font}\n"
 
     meta = playerctl('metadata', '--format',
@@ -356,7 +381,10 @@ def render():
     # A click on the heart writes the new state to the liked file immediately.
     liked_file = _read(spotify_api.LIKED_FILE)
     liked = {'1': True, '0': False}.get(liked_file, state.liked)
-    heart = '${color1}♥' if liked else ('${color}♡' if liked is False else '${color3}♡')
+    heart_state = int(bool(liked))            # unknown draws like not liked: the outline
+    heart_size = line_height(HEART_FONT)
+    heart_box = [heart_cx - heart_size / 2 - 8, MARGIN - 8, min_cx - WINDOW_BUTTON_PITCH / 2,
+                 MARGIN + heart_size + 6]
 
     g = f'${{goto {COLUMN_X}}}'
     # Running top of the current line, to place what draw.lua draws. The first line is
@@ -364,7 +392,7 @@ def render():
     y = MARGIN - LABEL_LIFT
     out = [f"${{image {COVER} -p 0,0 -s 118x118 -n}}${{voffset -{LABEL_LIFT}}}"
            f"{g}${{color1}}${{font {conky_font(LABEL_FONT)}}}NOW PLAYING${{font}}"
-           f"${{alignr}}${{font {conky_font(HEART_FONT)}}}{heart}${{font}}"]
+           f"${{font {conky_font(HEART_FONT)}}} ${{font}}"]   # the heart font sets the row height
     y += line_height(LABEL_FONT, HEART_FONT)
     for line in wrap(title, TITLE_FONT):
         out.append(f"{g}${{color2}}${{font {conky_font(TITLE_FONT)}}}{esc(line)}${{font}}")
@@ -401,7 +429,9 @@ def render():
     draw = [f'scale {SCALE}',
             f'bar {bar_x0} {bar_x1} {mid_y + BAR_DROP} {fraction:.4f} {duration:.3f}',
             f'controls {prev_cx} {play_cx} {next_cx} {mid_y} {SKIP_SIZE} {PLAY_SIZE} {int(status == "Playing")}',
-            f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}']
+            f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}',
+            window_line,
+            f'heart {heart_cx} {top_cy} {HEART_PX} {heart_state} ' + ' '.join(map(str, heart_box))]
     lyr_version = write_lyrics(track_id, duration)
     if lyr_version:
         # Full width under the artwork and controls: reserve LYRIC_ROWS rows there, and
@@ -417,14 +447,14 @@ def render():
     write_atomic(DRAW, '\n'.join(draw) + '\n')
 
     half = PLAY_SIZE / 2 + 4
-    heart_size = line_height(HEART_FONT)
     write_regions({
+        **top_regions,
         # a little padding around each target makes them easier to hit
         'prev': [prev_cx - SKIP_SIZE / 2 - 5, mid_y - half, prev_cx + SKIP_SIZE / 2 + 5, mid_y + half],
         'play': [play_cx - half, mid_y - half, play_cx + half, mid_y + half],
         'next': [next_cx - SKIP_SIZE / 2 - 5, mid_y - half, next_cx + SKIP_SIZE / 2 + 5, mid_y + half],
         'seek': [bar_x0 - 6, mid_y + BAR_DROP - 12, bar_x1 + 6, mid_y + BAR_DROP + 12],
-        'heart': [MARGIN + TEXT_WIDTH - heart_size - 8, MARGIN - 8, MARGIN + TEXT_WIDTH + 12, MARGIN + heart_size + 6],
+        'heart': heart_box,
         'bar': [bar_x0, bar_x1],
         'duration': duration,
     })

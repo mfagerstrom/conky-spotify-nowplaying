@@ -1,5 +1,7 @@
-"""Tests for nowplaying.py's pure logic: art colour, wrapping, formatting, files, lyrics."""
+"""Tests for nowplaying.py's pure logic: art colour, wrapping, formatting, files, lyrics,
+and the click regions render() writes."""
 import colorsys
+import json
 import os
 import time
 import unittest
@@ -138,6 +140,56 @@ class FormattingTest(unittest.TestCase):
         for pango, want in cases.items():
             with self.subTest(pango):
                 self.assertEqual(nowplaying.conky_font(pango), want)
+
+
+class WindowButtonsTest(support.TempDirTest):
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt')
+        self.redirect(nowplaying.spotify_api, LIKED_FILE='liked')
+
+    def render(self, status):
+        answers = {'status': status,
+                   'metadata': 'track1\tTitle\tArtist\tAlbum\t\t10000000\t200000000'}
+        with mock.patch.object(nowplaying, 'playerctl', side_effect=lambda cmd, *_: answers[cmd]), \
+                mock.patch.object(nowplaying.threading, 'Thread'), \
+                mock.patch.object(nowplaying.spotify_api, 'write_liked'):
+            text = nowplaying.render()
+        with open(nowplaying.REGIONS) as f:
+            return text, json.load(f), support.read(nowplaying.DRAW)
+
+    def assert_left_of(self, a, b):
+        self.assertLessEqual(a[2], b[0], f'{a} overlaps or is right of {b}')
+
+    def test_heart_minimize_close_run_left_to_right_without_overlapping(self):
+        text, regions, draw = self.render('Playing')
+        self.assert_left_of(regions['heart'], regions['minimize'])
+        self.assert_left_of(regions['minimize'], regions['close'])
+        # the close icon is drawn inside the text area; only its hit area reaches the border
+        window = next(line for line in draw.splitlines() if line.startswith('window '))
+        _, _, close_cx, _, size = window.split()
+        self.assertLessEqual(float(close_cx) + float(size) / 2, nowplaying.MARGIN + nowplaying.TEXT_WIDTH)
+        # the heart is drawn by draw.lua, with its hover box matching its click region
+        self.assertNotIn('♡', text)
+        heart = next(line for line in draw.splitlines() if line.startswith('heart '))
+        self.assertEqual([float(v) for v in heart.split()[5:]], regions['heart'])
+
+    def test_heart_state_follows_the_liked_file(self):
+        for liked, want in (('1', '1'), ('0', '0'), ('', '0')):
+            with self.subTest(liked=liked):
+                nowplaying.write_atomic(nowplaying.spotify_api.LIKED_FILE, liked)
+                nowplaying.state.liked = None
+                _, _, draw = self.render('Playing')
+                heart = next(line for line in draw.splitlines() if line.startswith('heart '))
+                self.assertEqual(heart.split()[4], want)
+
+    def test_buttons_stay_when_spotify_is_not_playing(self):
+        text, regions, draw = self.render('Stopped')
+        self.assertIn('not playing', text)
+        self.assertEqual(sorted(regions), ['close', 'minimize'])
+        self.assertIn('\nwindow ', draw)
+        self.assertNotIn('bar ', draw)
 
 
 class FilesTest(support.TempDirTest):
