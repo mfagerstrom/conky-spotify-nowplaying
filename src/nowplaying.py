@@ -106,10 +106,11 @@ state = State()
 
 def art_colour(path):
     """Spotify-style backdrop: the cover's biggest vivid colour (if it covers at least 5%
-    of the image, else its dominant colour), darkened so white text stays readable."""
+    of the image, else its dominant colour), darkened so white text stays readable.
+    On a mostly grayscale cover, any small splash of colour beats the gray/black."""
     pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
-    buckets, total = {}, 0
+    buckets, accents, total, neutral = {}, {}, 0, 0
     for yy in range(pb.get_height()):
         for xx in range(pb.get_width()):
             i = yy * stride + xx * n
@@ -119,9 +120,20 @@ def art_colour(path):
             tot = buckets.setdefault(key, [0, 0.0, 0.0, 0.0, sat >= 0.35 and v >= 0.3])
             tot[0] += 1; tot[1] += r; tot[2] += g; tot[3] += b
             total += 1
+            if sat < 0.15 or v < 0.15:           # gray, or too dark for its hue to mean much
+                neutral += 1
+            elif sat >= 0.25 and v >= 0.2:       # accent candidates, grouped by hue only
+                acc = accents.setdefault(int(h * 12 + 0.5) % 12, [0, 0.0, 0.0, 0.0])
+                acc[0] += 1; acc[1] += r; acc[2] += g; acc[3] += b
+    accent = max(accents.values(), default=None)
     vivid = [t for t in buckets.values() if t[4]]
-    best = max(vivid) if vivid and max(vivid)[0] >= 0.05 * total else max(buckets.values())
-    count, r, g, b, _ = best
+    if neutral >= 0.85 * total and accent and accent[0] >= 0.004 * total:
+        best = accent                            # ~9px floor keeps JPEG noise from winning
+    elif vivid and max(vivid)[0] >= 0.05 * total:
+        best = max(vivid)
+    else:
+        best = max(buckets.values())
+    count, r, g, b = best[:4]
     h, sat, v = colorsys.rgb_to_hsv(r / count, g / count, b / count)
     return colorsys.hsv_to_rgb(h, min(sat, 0.65), min(max(v, 0.25), 0.38))
 
