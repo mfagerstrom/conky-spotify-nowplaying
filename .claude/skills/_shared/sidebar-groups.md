@@ -1,6 +1,7 @@
 # Sidebar groups
 
-Shared by every skill, and by any task a session works outside one. The
+Shared by every skill, by [run-watch.md](run-watch.md), and by any task a
+session works outside one. The
 desktop app's own session states cannot be extended, so the Code tab sidebar
 carries custom groups that say where each session stands. This file is the
 only place the groups and their moves are written out.
@@ -27,27 +28,40 @@ A session files itself, and only itself, with
 other session asks the user first, so it is never done unasked.
 
 - Task starts, or a branch is cut for it with `/new-branch`: `Working`.
-- An external build it has to wait on starts, such as the Launchpad build in
-  `/release` step 7: `Tests Running`. Back to `Working` once the build
-  settles, before reading its result, because triage can run long and the
-  group is wrong for all of it.
+- A Launchpad build is recorded with `scripts/catchup.py add-lp`, as in
+  `/release` step 7: `Tests Running`. `add-lp` prints
+  `sidebar: a Launchpad build is open` when it records it.
+- `check` or `wait` shows no Launchpad build still open: back to `Working`.
+  Both print `sidebar: no Launchpad builds open` at that point. The move is
+  the first thing the session does with that output, before it reads the
+  result, because triage of a failed build can run long and the group is
+  wrong for all of it.
 - Pull request opened and handed to the user, or the turn ends on a question
   only the user can answer (a `/release` version confirmation, say):
   `Needs Review`. This holds for every pull request the session opens,
-  including one opened on the side of a longer task.
+  including one opened on the side of a longer task. The session records the
+  pull request with `scripts/catchup.py add-pr` and leaves the one `wait`
+  running, per [run-watch.md](run-watch.md#waiting-on-a-merge), so the merge
+  reaches it without the user reporting it.
 - The user answers, or review comments come in to act on: `Working`.
-- Pull request merged or closed: pick the group by what the session still
-  holds. Any of these means `Working`:
+- `pr: <number> merged` or `closed without merging`: pick the group by what
+  the session still holds. Any of these means `Working`:
 
+  - an open row in the ledger, a Launchpad build or another pull request;
   - another open pull request of its own that still needs work;
   - a background task or subagent still running;
   - anything the user asked for in this session that is not finished yet.
 
   A session whose other pull request is waiting on the user goes to
   `Needs Review`. Only when nothing is left does it go to `Completed`.
+  `wait` prints a `sidebar:` line with every closed pull request as the
+  reminder, and the move comes before anything else the session does with
+  that output.
 - A task that opened no pull request, a finished `/release` for example, goes
   to `Completed` when it ends with nothing left to wait on.
 - Task held by another session: `Blocked`. See the next section.
+- `issue: <number> closed`: `Working`, then the deferred task starts over.
+  See the next section.
 
 ## Blocked by another session
 
@@ -57,17 +71,35 @@ a change it needs sits in a pull request that has not merged.
 
 1. Report who holds the work and what it is waiting on.
 2. Move to `Blocked`.
-3. End the turn.
+3. Record the blocker in the session's ledger, and make sure one `wait` is
+   running on it, per
+   [run-watch.md](run-watch.md#waiting-on-a-blocking-issue):
 
-It leaves `Blocked` for `Working` when the user invokes it again, and starts
-the task over from the skill's first step, because the blocker may have
-already done some or all of it. When the blocker finished the task, report
-that and go to `Completed`.
+   ```bash
+   scripts/catchup.py add-issue <ledger> <blocking issue> "<short label>"
+   ```
+
+   The blocking issue is the one whose close means the way is clear. When the
+   blocker is a pull request with no issue behind it, record the pull request
+   with `add-pr` instead, and read its `pr: <number> merged` the same way.
+4. End the turn. The watcher is the only thing running.
+
+When `wait` prints `issue: <number> closed` and
+`sidebar: a blocking issue closed`, the session moves to `Working` before
+anything else, then starts the deferred task over from the skill's first
+step, because the blocker may have already done some or all of it. When the
+deferred task's own issue is now closed, the holder finished it: report that
+and go to `Completed`. A blocker closed as not planned frees the work the same
+way; the session says so in its report.
+
+A blocker whose hold ends without a close or a merge cannot be watched this
+way. The session moves to `Blocked`, records no row, and leaves `Blocked` when
+the user invokes it again.
 
 A session with anything of its own still open files by that instead, and
 `Blocked` waits until it is the last thing left:
 
-- an external build still running: `Tests Running`
+- a Launchpad build still open: `Tests Running`
 - a pull request waiting on the user, or a question to the user: `Needs Review`
 - work it can still do while it waits: `Working`
 
