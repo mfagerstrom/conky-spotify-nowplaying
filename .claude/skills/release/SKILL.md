@@ -69,15 +69,13 @@ entry to the user and get the version confirmed.
 ## 3. Static checks
 
 All must pass before building: the list in
-[ready-signal.md](../_shared/ready-signal.md#the-static-checks-come-first),
-then
+[static-checks.md](../_shared/static-checks.md), then
 
 ```bash
 dpkg-parsechangelog -S Version        # prints the new X.Y.Z
 ```
 
-There is no Lua checker installed; `draw.lua` and `conky.conf` errors show up
-in the smoke test.
+Step 4 below is the build and the run that file asks for.
 
 ## 4. Build and smoke-test the installed package
 

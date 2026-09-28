@@ -35,7 +35,8 @@ other session asks the user first, so it is never done unasked.
   the first thing the session does with that output, before it reads the
   result, because triage of a failed build can run long and the group is
   wrong for all of it.
-- Pull request open, its static checks passing and mergeable: `Self Review`,
+- Pull request open, its static checks
+  ([static-checks.md](static-checks.md)) passing and mergeable: `Self Review`,
   while the session reviews it and fixes what the review finds, per
   [self-review.md](self-review.md). A session whose static checks fail or
   whose pull request conflicts stays in `Working` until that is fixed.

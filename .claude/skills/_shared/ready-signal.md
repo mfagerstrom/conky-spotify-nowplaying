@@ -41,22 +41,9 @@ variant of the line for work that did not reach one.
 
 ## The static checks come first
 
-This repository has no CI, so the checks run locally, on the branch head,
-before every push to a pull request and again before the self review starts.
-This is the one list; `/release` step 3 runs it too:
-
-```bash
-python3 -m py_compile src/*.py bin/conky-spotify-nowplaying scripts/*.py
-python3 scripts/catchup_test.py
-sh -n build-deb.sh release-ppa.sh
-desktop-file-validate packaging/conky-spotify-nowplaying.desktop
-```
-
-`desktop-file-validate` hints count as failures to fix. A change that touches
-`src/`, `bin/`, `packaging/` or `debian/` has not been checked until it has
-run: use the `run` skill, or build and install the package as in `/release`
-step 4, and say in the pull request's test plan which one was done. A change
-to documentation or skills alone owes no run.
+The static checks are the list in [static-checks.md](static-checks.md), with
+the build and the run it asks for. They pass on the branch head before every
+push to a pull request and again before the self review starts.
 
 ## The mergeability check comes first
 
