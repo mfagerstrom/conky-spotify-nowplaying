@@ -234,7 +234,7 @@ works an issue under whatever title it has.
 
    ```
    Background colour: prefer a small accent colour over gray/black on mostly-grayscale covers
-     -> [layout] background prefers a small accent colour over grey on mostly grayscale covers
+     -> [layout] background prefers a small accent colour over grey or black on mostly grayscale covers
    Add unit tests
      -> [tooling] add unit tests
    ```
