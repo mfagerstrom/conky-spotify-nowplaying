@@ -221,7 +221,10 @@ the signal goes out again.
    for a merge, before anything else.
 2. Read the pull request for comments posted since the handoff and act on
    anything that still needs doing.
-3. Confirm the issue closed, and take the claim off it, reading it back:
+3. Confirm the issue closed. One still open after the merge (its closing
+   keyword was lost on the way) is closed with
+   `gh issue close <N> --comment "Done in #<pr>."`. Then take the claim off
+   it, reading it back:
 
    ```bash
    gh issue edit <N> --remove-label "In Progress"
@@ -236,6 +239,7 @@ the signal goes out again.
 
    ```bash
    gh pr view <pr> --json state --jq .state      # must print MERGED
+   git status --short                            # must print nothing
    git fetch origin
    git switch --detach origin/main
    git branch -D <branch>
@@ -244,8 +248,11 @@ the signal goes out again.
 
    The worktree lets go of the branch first, since git will not delete a
    checked-out branch. `-D` because the check above already proved the merge,
-   whatever merge method the user picked. A worktree with uncommitted changes
-   stays on its branch and is reported.
+   whatever merge method the user picked. When `git status` lists anything,
+   stop before the switch: the worktree stays on its branch, nothing is
+   deleted, and the changes are reported.
 
-`closed without merging` means the user closed it: report that, take the
-label off the issue if it is still open, and leave the branch alone.
+`closed without merging` means the user closed it: move to the group
+[sidebar-groups.md](../_shared/sidebar-groups.md) names for a close, report
+it, take the label off the issue if it is still open, and leave the branch
+alone.
