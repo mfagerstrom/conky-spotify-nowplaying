@@ -6,7 +6,10 @@
 set -e
 cd "$(dirname "$0")"
 PPA=${PPA:-ppa:mfagerstrom/conky-spotify-nowplaying}
-debuild -S -d ${GPG_KEY:+-k"$GPG_KEY"}
+# Signing key registered on Launchpad (the maintainer address in debian/ is a no-reply one,
+# so debsign can't pick the key from it).
+GPG_KEY=${GPG_KEY:-5DACA320C75920B4F632EC636F3AA291325FC325}
+debuild -S -d -k"$GPG_KEY"
 VERSION=$(dpkg-parsechangelog -S Version)
 CHANGES="../conky-spotify-nowplaying_${VERSION}_source.changes"
 echo "Uploading $CHANGES to $PPA"
