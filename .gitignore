@@ -1,8 +1,14 @@
 __pycache__/
 *.log
 *.err
-# machine-specific / private state (lives in ~/.config/conky, never commit)
+# machine-specific / private state (lives in ~/.config/conky-spotify-nowplaying, never commit)
 position
 spotify-client-id
 spotify-token.json
 dist/
+# debhelper build leftovers
+debian/.debhelper/
+debian/conky-spotify-nowplaying/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars

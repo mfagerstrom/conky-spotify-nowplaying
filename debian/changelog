@@ -1,0 +1,14 @@
+conky-spotify-nowplaying (1.0.1) resolute; urgency=medium
+
+  * Top-bar (AppIndicator) icon with the current track, Start at login and Quit.
+  * Back off from the Spotify API while rate limited (429 Retry-After).
+  * Fewer Spotify API calls: likes every 30 s, Liked Songs rescanned daily.
+  * Fix the installed launcher looking for its files in /usr/src.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Mon, 28 Sep 2026 12:50:00 -0400
+
+conky-spotify-nowplaying (1.0.0) resolute; urgency=medium
+
+  * First packaged release.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Mon, 28 Sep 2026 12:35:00 -0400

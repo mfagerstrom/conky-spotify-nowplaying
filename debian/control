@@ -1,0 +1,23 @@
+Source: conky-spotify-nowplaying
+Section: sound
+Priority: optional
+Maintainer: mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Homepage: https://github.com/mfagerstrom/conky-spotify-nowplaying
+Vcs-Browser: https://github.com/mfagerstrom/conky-spotify-nowplaying
+Vcs-Git: https://github.com/mfagerstrom/conky-spotify-nowplaying.git
+Rules-Requires-Root: no
+
+Package: conky-spotify-nowplaying
+Architecture: all
+Depends: ${misc:Depends}, conky-all, playerctl, python3, python3-gi, gir1.2-pango-1.0,
+ gir1.2-gdkpixbuf-2.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, libx11-6,
+ x11-utils, x11-xserver-utils, xdg-utils, libnotify-bin, fonts-ubuntu, fonts-dejavu-core
+Description: Spotify now-playing desktop widget (Conky)
+ Shows the current Spotify track with album art, previous/play-pause/next
+ controls, a draggable seek bar, a like button and smoothly scrolling synced
+ lyrics from LRCLIB. The background takes its colour from the album art, and a
+ top-bar icon offers start-at-login and Quit.
+ .
+ Built for GNOME on Wayland (runs through XWayland).

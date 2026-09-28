@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+# The widget's helpers are run with python3 by the launcher; keep the scripts
+# executable anyway so they can be run directly for debugging.
+execute_after_dh_fixperms:
+	chmod 755 debian/conky-spotify-nowplaying/usr/share/conky-spotify-nowplaying/*.py

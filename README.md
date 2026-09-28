@@ -72,13 +72,20 @@ Run straight from a checkout, no install needed (dependencies as listed in `pack
 bin/conky-spotify-nowplaying start
 ```
 
-Build the package into `dist/`:
+Build the package into `dist/` (needs `sudo apt install debhelper devscripts`):
 
 ```sh
 ./build-deb.sh
 ```
 
-The version comes from `VERSION`.
+Packaging lives in `debian/`; the version comes from `debian/changelog`.
+
+### Releasing
+
+1. Add a changelog entry: `dch -v X.Y.Z -D resolute "What changed"`
+2. Build and attach the `.deb` to a GitHub release: `./build-deb.sh`
+3. Upload the signed source package to the PPA: `./release-ppa.sh` (needs `dput` and a GPG
+   key registered on Launchpad)
 
 ## How it works
 
@@ -91,7 +98,7 @@ The version comes from `VERSION`.
 | `src/conky-mouse.py` | Handles clicks and dragging (Conky's own mouse hook gets no button presses under XWayland) and keeps the window at its saved position |
 | `src/spotify_api.py` | Minimal Spotify Web API client (PKCE login, like/unlike, Liked Songs index, rate-limit backoff) |
 | `src/tray.py` | Top-bar (AppIndicator) icon: current track, start at login, Quit |
-| `packaging/`, `build-deb.sh` | Debian package: desktop entry, icon, control file |
+| `debian/`, `packaging/` | Debian packaging (also used for the PPA), desktop entry, icons |
 
 Settings live in `~/.config/conky-spotify-nowplaying/` (`position`, `spotify-client-id`,
 `spotify-token.json`) and runtime files/logs in `~/.cache/conky-spotify-nowplaying/`.
@@ -101,3 +108,7 @@ Settings live in `~/.config/conky-spotify-nowplaying/` (`position`, `spotify-cli
 - Tested on Ubuntu 26.04, GNOME/Wayland, with 2x display scaling across three monitors.
 - The widget is an unmanaged ("override") window: it stays on top on every workspace.
 - Lyrics coverage depends on LRCLIB; only synced lyrics are shown.
+
+## License
+
+[MIT](LICENSE)

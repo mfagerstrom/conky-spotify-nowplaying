@@ -1,0 +1,3 @@
+tar-ignore = .git
+tar-ignore = dist
+tar-ignore = __pycache__
