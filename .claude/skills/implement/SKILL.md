@@ -113,7 +113,8 @@ named `<type>/issue-<N>-<slug>`. A session sitting in the main checkout at
 
 Follow the issue's acceptance criteria literally and deliver all of them. If a
 part turns out blocked, finish the rest and say what was left out and why.
-Something unrelated found on the way is a new issue, not part of this diff.
+Something unrelated found on the way is a new issue, filed with
+`/create-issue`, not part of this diff.
 
 Match the code around the change: its comment density, naming and idiom.
 Comments say how the code works now and why, never its history or which issue
