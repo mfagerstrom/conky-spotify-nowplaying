@@ -7,12 +7,14 @@ work out from ~ at import time lands there rather than in the user's ~/.cache an
 import atexit
 import ctypes
 import importlib.util
+import io
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src')
@@ -63,3 +65,14 @@ class TempDirTest(unittest.TestCase):
 def read(path):
     with open(path) as f:
         return f.read()
+
+
+def response(body):
+    """A stand-in for the context-managed response urlopen returns, reading `body` (bytes)."""
+    r = mock.MagicMock()
+    r.__enter__.return_value = io.BytesIO(body)
+    return r
+
+
+def http_error(code, headers=None):
+    return urllib.error.HTTPError('https://example.test/', code, 'error', headers or {}, None)

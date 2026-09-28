@@ -1,5 +1,4 @@
 """Tests for spotify_api.py: track keys, the Liked Songs index, time windows, 429 backoff."""
-import io
 import os
 import unittest
 import urllib.error
@@ -117,15 +116,6 @@ class TimeWindowTest(SpotifyApiTest):
         self.assertFalse(spotify_api.recently_toggled())
 
 
-def response(body):
-    r = mock.MagicMock()
-    r.__enter__.return_value = io.BytesIO(body)
-    return r
-
-
-def http_error(code, headers=None):
-    return urllib.error.HTTPError('https://api.spotify.com/v1/me', code, 'error', headers or {}, None)
-
 
 class ApiTest(SpotifyApiTest):
 
@@ -137,7 +127,7 @@ class ApiTest(SpotifyApiTest):
         self.addCleanup(patcher.stop)
 
     def test_json_response(self):
-        with mock.patch('urllib.request.urlopen', return_value=response(b'[true]')) as urlopen:
+        with mock.patch('urllib.request.urlopen', return_value=support.response(b'[true]')) as urlopen:
             self.assertEqual(spotify_api.api('GET', '/me/library/contains', uris='spotify:track:1'), [True])
         req = urlopen.call_args.args[0]
         self.assertEqual(req.full_url,
@@ -146,11 +136,11 @@ class ApiTest(SpotifyApiTest):
         self.assertEqual(req.get_header('Authorization'), 'Bearer token')
 
     def test_empty_response_is_none(self):
-        with mock.patch('urllib.request.urlopen', return_value=response(b'')):
+        with mock.patch('urllib.request.urlopen', return_value=support.response(b'')):
             self.assertIsNone(spotify_api.api('PUT', '/me/library', uris='spotify:track:1'))
 
     def test_429_records_retry_after_and_blocks_further_calls(self):
-        with mock.patch('urllib.request.urlopen', side_effect=http_error(429, {'Retry-After': '120'})):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(429, {'Retry-After': '120'})):
             with self.assertRaises(spotify_api.RateLimited) as caught:
                 spotify_api.api('GET', '/me/tracks')
         self.assertEqual(caught.exception.until, NOW + 120)
@@ -161,13 +151,13 @@ class ApiTest(SpotifyApiTest):
         urlopen.assert_not_called()
 
     def test_429_without_retry_after_waits_a_minute(self):
-        with mock.patch('urllib.request.urlopen', side_effect=http_error(429)):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(429)):
             with self.assertRaises(spotify_api.RateLimited) as caught:
                 spotify_api.api('GET', '/me/tracks')
         self.assertEqual(caught.exception.until, NOW + 60)
 
     def test_other_http_errors_are_raised_without_backoff(self):
-        with mock.patch('urllib.request.urlopen', side_effect=http_error(500)):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(500)):
             with self.assertRaises(urllib.error.HTTPError):
                 spotify_api.api('GET', '/me/tracks')
         self.assertFalse(os.path.exists(spotify_api.BACKOFF_FILE))

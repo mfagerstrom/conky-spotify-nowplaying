@@ -1,7 +1,5 @@
 """Tests for nowplaying.py's pure logic: art colour, wrapping, formatting, files, lyrics."""
 import colorsys
-import io
-import json
 import os
 import time
 import unittest
@@ -155,21 +153,11 @@ class FilesTest(support.TempDirTest):
         self.assertEqual(nowplaying._read(os.path.join(self.dir, 'missing')), '')
 
 
-def response(payload):
-    """A stand-in for urlopen's context-managed response."""
-    r = mock.MagicMock()
-    r.__enter__.return_value = io.BytesIO(json.dumps(payload).encode())
-    return r
-
-
-def http_error(code):
-    return urllib.error.HTTPError('https://lrclib.net/api/get', code, 'error', {}, None)
-
 
 class LrclibTest(unittest.TestCase):
 
     def test_request_and_parse(self):
-        with mock.patch('urllib.request.urlopen', return_value=response({'id': 1})) as urlopen:
+        with mock.patch('urllib.request.urlopen', return_value=support.response(b'{"id": 1}')) as urlopen:
             self.assertEqual(nowplaying._lrclib('get', track_name='Song & Dance', duration=200), {'id': 1})
         req = urlopen.call_args.args[0]
         self.assertEqual(req.full_url,
@@ -177,11 +165,11 @@ class LrclibTest(unittest.TestCase):
         self.assertIn('conky-spotify-nowplaying', req.get_header('User-agent'))
 
     def test_not_found_is_none(self):
-        with mock.patch('urllib.request.urlopen', side_effect=http_error(404)):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(404)):
             self.assertIsNone(nowplaying._lrclib('get', track_name='x'))
 
     def test_other_http_errors_are_raised(self):
-        with mock.patch('urllib.request.urlopen', side_effect=http_error(500)):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(500)):
             with self.assertRaises(urllib.error.HTTPError):
                 nowplaying._lrclib('get', track_name='x')
 
