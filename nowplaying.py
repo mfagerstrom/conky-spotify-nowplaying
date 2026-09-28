@@ -51,6 +51,7 @@ CONTROL_ROW_FONT = 'DejaVu Sans 15'            # only sets the controls row's he
 SKIP_SIZE, PLAY_SIZE, CONTROL_GAP = 14, 24, 12
 LYRIC_ROWS = 3
 LIKE_POLL_SECONDS = 10
+METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
 
 _pango = PangoCairo.FontMap.get_default().create_context()
 PangoCairo.context_set_resolution(_pango, 96)
@@ -93,6 +94,9 @@ class State:
         self.liked_checked = 0.0
         self.lyrics = None         # {'synced': [(sec, line)]}, or {} if there are no synced lyrics
         self.lyrics_retry = None   # time to retry a lyrics fetch that hit a network error
+        self.lyrics_key = None     # (track, title, artist, album, length) the lyrics are for / being fetched for
+        self.cover_url = None      # art URL last requested
+        self.track_since = 0.0     # when the current track id first appeared
         self.lyrics_written = None # version of the lyrics last written to lyrics.txt
         self.lock = threading.Lock()
 
@@ -185,7 +189,8 @@ def log(msg):
         f.write(time.strftime('%T ') + msg + '\n')
 
 
-def fetch_lyrics(track_id, artist, title, album, duration):
+def fetch_lyrics(key):
+    track_id, title, artist, album, duration = key
     """Synced lyrics only (unsynced ones aren't shown). Exact match first (LRCLIB wants
     whole seconds), then the closest-length search hit with synced lyrics.
     Network errors leave state.lyrics as None so the next render retries."""
@@ -206,9 +211,10 @@ def fetch_lyrics(track_id, artist, title, album, duration):
                     break
             else:
                 record = None
-    except Exception:
+    except Exception as e:
+        log(f'lyrics lookup failed ({type(e).__name__}), retrying in 30 s: {artist} - {title}')
         with state.lock:
-            if state.track == track_id:
+            if state.lyrics_key == key:
                 state.lyrics_retry = time.time() + 30
         return
     lyrics = {}
@@ -219,8 +225,9 @@ def fetch_lyrics(track_id, artist, title, album, duration):
             if m:
                 synced.append((int(m[1]) * 60 + float(m[2]), m[3].strip()))
         lyrics['synced'] = synced
+    log(f"lyrics: {len(lyrics.get('synced', []))} synced lines for {artist} - {title} ({duration:.0f} s)")
     with state.lock:
-        if state.track == track_id:
+        if state.lyrics_key == key:
             state.lyrics = lyrics
 
 
@@ -300,22 +307,34 @@ def render():
     duration = int(len_us or 0) / 1e6
 
     now = time.time()
+    # When skipping, Spotify announces the new track id a moment before the rest of the
+    # metadata (title, length, art) catches up. Only look up lyrics/art once the metadata
+    # has had a moment to settle, and look them up again if it changes afterwards.
+    lyrics_key = (track_id, title, artist, album, round(duration))
+    fetch_lyrics_now = fetch_cover_now = False
     with state.lock:
         new_track = track_id != state.track
         if new_track:
             state.track, state.liked, state.lyrics, state.liked_checked = track_id, None, None, now
-            state.lyrics_retry = None
-        retry_lyrics = state.lyrics_retry is not None and now >= state.lyrics_retry
-        if retry_lyrics:
-            state.lyrics_retry = None
+            state.lyrics_retry, state.track_since = None, now
+        settled = now - state.track_since >= METADATA_SETTLE and title and duration > 0
+        if state.lyrics_retry is not None and now >= state.lyrics_retry:
+            state.lyrics_retry, state.lyrics_key = None, None
+        if settled and state.lyrics_key != lyrics_key:
+            state.lyrics_key, state.lyrics = lyrics_key, None
+            fetch_lyrics_now = True
+        if settled and art and art != state.cover_url:
+            state.cover_url = art
+            fetch_cover_now = True
         poll_like = new_track or now - state.liked_checked > LIKE_POLL_SECONDS
         if poll_like:
             state.liked_checked = now
     if new_track:
         spotify_api.write_liked(None)  # don't show the previous track's heart
+    if fetch_cover_now:
         threading.Thread(target=fetch_cover, args=(art,), daemon=True).start()
-    if new_track or retry_lyrics:
-        threading.Thread(target=fetch_lyrics, args=(track_id, artist, title, album, duration), daemon=True).start()
+    if fetch_lyrics_now:
+        threading.Thread(target=fetch_lyrics, args=(lyrics_key,), daemon=True).start()
     if poll_like:
         threading.Thread(target=fetch_liked, args=(track_id,), daemon=True).start()
 
