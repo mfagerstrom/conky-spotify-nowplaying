@@ -106,9 +106,9 @@ While it is open, the row's state says where it is (`not in the archive yet`,
 
 ## Waiting on a merge
 
-A session that hands a pull request to the user, per
-[sidebar-groups.md](sidebar-groups.md), records it and lets the watcher wait
-for the merge:
+A session that has sent the ready signal, per
+[ready-signal.md](ready-signal.md), records the pull request and lets the
+watcher wait for the merge:
 
 ```bash
 scripts/catchup.py add-pr <ledger> <pr-number> "<short label>"
