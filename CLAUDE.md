@@ -14,5 +14,6 @@ handed over, and ends in the ready signal. The loop is in
 `.claude/skills/_shared/ready-signal.md`.
 
 Issues are filed with `/create-issue`, titled `[<area>] <description>` and
-labelled by area and kind. They are worked end to end with `/implement <number>`: claim, branch, work,
-pull request, self review, handoff, and cleanup after the merge.
+labelled by area and kind. They are worked end to end with
+`/implement <number>`: claim, branch, work, pull request, self review,
+handoff, and cleanup after the merge.

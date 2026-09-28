@@ -80,8 +80,9 @@ State the observed behaviour or the requested change. No conventional-commit
 verb prefix: `fix`, `feat` and `chore` belong on the branch name and the
 commit, and the kind label says the rest.
 
-Lower case after the area, no trailing period, present tense, specific enough
-to recognise without opening the issue. `lyrics are broken` is not a
+Lower case after the area except for names (Spotify, LRCLIB, Conky), no
+trailing period, present tense, specific enough to recognise without opening
+the issue. `lyrics are broken` is not a
 description; `synced lines drift behind the track after a seek` is.
 
 ## 3. Body
@@ -97,8 +98,8 @@ The body is not hand-wrapped.
 - **What should happen** - the behaviour wanted, and where it comes from when
   it is written down (the README, an earlier issue, Spotify's own app).
 - **How to reproduce** - what the widget was showing when it happened:
-  - the track, as title and artist, with its Spotify URI when known
-    (`playerctl -p spotify metadata mpris:trackid`);
+  - the track, as title and artist, with its link when known
+    (`playerctl -p spotify metadata xesam:url`);
   - lyrics availability: synced, plain only, or none on LRCLIB;
   - the monitor setup: how many, their scaling, and which one the widget sits
     on;
@@ -175,12 +176,15 @@ Any other label that does not already exist is never created here.
    gh issue view <n> --json body --jq .body > <scratchpad>/issue-body.md
    test -s <scratchpad>/issue-body.md || { echo "empty fetch, not editing"; exit 1; }
    # append the item, then:
-   gh issue edit <n> --body-file <scratchpad>/issue-body.md
+   test -s <scratchpad>/issue-body.md && \
+     gh issue edit <n> --body-file <scratchpad>/issue-body.md
+   gh issue view <n> --json body --jq .body | head -5
    ```
 
    Run the fetch from inside the repository: `gh` finds the repo from the
    working directory, and a fetch from anywhere else writes an empty file that
-   `--body-file` then writes over the issue, reporting success.
+   `--body-file` then writes over the issue, reporting success. The read-back
+   after the edit is what shows the old body survived the append.
 
 2. Confirm the title with the user when the description was inferred rather
    than given. A title the user supplied is used as it is once it fits the
@@ -204,20 +208,23 @@ URL exists.
 
 Issues filed before this convention are retitled in place, never closed and
 refiled, since their numbers are referenced from branches, pull requests and
-other issues. Retitle when asked to clean up the tracker, and when an old issue
-is picked up for work.
+other issues. Retitle only when asked to clean up the tracker: `/implement`
+works an issue under whatever title it has.
 
 1. List candidates:
    `gh issue list --state open --limit 100 --json number,title,labels`.
-2. A title already matching `^\[[a-z]+\] \S` is left alone, but still gets its
-   area label if it is missing one.
+2. A title already matching
+   `^\[(lyrics|likes|controls|layout|tray|packaging|tooling)\] \S` is left
+   alone, but still gets its area label if it is missing one. Any other
+   bracketed prefix is an old title like the rest.
 3. Take the area from the body and from the files it names. When neither says,
    ask with `AskUserQuestion` rather than guess: a wrong area hides the issue
    from the view it belongs in.
 4. Keep the description's meaning: drop the verb prefix and keep the words that
    carry information.
-5. Show the user the whole old-to-new list before applying it, then apply one
-   at a time, title and label together, reading the labels back:
+5. Show the user the whole old-to-new list before applying it. Then create
+   each area label the list uses, per section 5, and apply one issue at a
+   time, title and label together, reading the labels back:
 
    ```bash
    gh issue edit <n> --title "<new title>" --add-label "<area>"
