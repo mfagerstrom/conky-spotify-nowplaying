@@ -11,9 +11,10 @@ found clean.
 
 ## When it starts
 
-The self review starts once the pull request is open, the local static checks
-pass on the branch head, and the pull request is mergeable, per
-[ready-signal.md](ready-signal.md). The review ends in the signal.
+The self review starts once the pull request is open, the static checks in
+[static-checks.md](static-checks.md) pass on the branch head, and the pull
+request is mergeable, per [ready-signal.md](ready-signal.md). The review ends
+in the signal.
 
 Move the session to the `Self Review` sidebar group as the review starts, per
 [sidebar-groups.md](sidebar-groups.md).
@@ -65,7 +66,7 @@ commit alone does not show.
 1. Run a pass.
 2. No finding holds: the loop is over. Go to [When it ends](#when-it-ends).
 3. Otherwise fix every finding that holds, on the branch, rerun the static
-   checks from [ready-signal.md](ready-signal.md#the-static-checks-come-first),
+   checks from [static-checks.md](static-checks.md),
    and push. Each finding is fixed, none is set aside for the user to pick up
    at review, and none is filed away for later. The session stays in
    `Self Review` while it fixes.

@@ -11,7 +11,8 @@ How is in `.claude/skills/_shared/run-watch.md`.
 Every pull request a session opens gets its own self review before it is
 handed over, and ends in the ready signal. The loop is in
 `.claude/skills/_shared/self-review.md`, the signal and its gates in
-`.claude/skills/_shared/ready-signal.md`.
+`.claude/skills/_shared/ready-signal.md`, and the static checks every push
+passes in `.claude/skills/_shared/static-checks.md`.
 
 Issues are filed with `/create-issue`, titled `[<area>] <description>` and
 labelled by area and kind. They are worked end to end with
