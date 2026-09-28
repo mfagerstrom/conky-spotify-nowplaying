@@ -39,7 +39,8 @@ BOTTOM_TRIM = 10                              # px taken off border_inner_margin
                                               # (conky.conf's minimum_height is reduced to match)
 SPACER_FONT = 'Ubuntu Sans 1'
 SPACER_HEIGHT = 28                            # what conky actually adds for that spacer line (measured)
-TIME_DROP = 1                                 # timestamps sit this much below the bar's centre line
+TIME_DROP = 3                                 # timestamps sit this much below the buttons' centre line
+BAR_DROP = 2                                  # seek bar sits this much below the buttons' centre line
 COLUMN_WIDTH = TEXT_WIDTH - COLUMN_X - 4
 TITLE_FONT, ARTIST_FONT, LYRIC_FONT = 'Ubuntu Sans Bold 17', 'Ubuntu Sans 13', 'Ubuntu Sans 11'
 LABEL_FONT, HEART_FONT = 'Ubuntu Sans Bold 10', 'DejaVu Sans 15'
@@ -352,7 +353,7 @@ def render():
     y += row
 
     draw = [f'scale {SCALE}',
-            f'bar {bar_x0} {bar_x1} {mid_y} {fraction:.4f} {duration:.3f}',
+            f'bar {bar_x0} {bar_x1} {mid_y + BAR_DROP} {fraction:.4f} {duration:.3f}',
             f'controls {prev_cx} {play_cx} {next_cx} {mid_y} {SKIP_SIZE} {PLAY_SIZE} {int(status == "Playing")}',
             f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}']
     lyr_version = write_lyrics(track_id, duration)
@@ -376,7 +377,7 @@ def render():
         'prev': [prev_cx - SKIP_SIZE / 2 - 5, mid_y - half, prev_cx + SKIP_SIZE / 2 + 5, mid_y + half],
         'play': [play_cx - half, mid_y - half, play_cx + half, mid_y + half],
         'next': [next_cx - SKIP_SIZE / 2 - 5, mid_y - half, next_cx + SKIP_SIZE / 2 + 5, mid_y + half],
-        'seek': [bar_x0 - 6, mid_y - 12, bar_x1 + 6, mid_y + 12],
+        'seek': [bar_x0 - 6, mid_y + BAR_DROP - 12, bar_x1 + 6, mid_y + BAR_DROP + 12],
         'heart': [MARGIN + TEXT_WIDTH - heart_size - 8, MARGIN - 8, MARGIN + TEXT_WIDTH + 12, MARGIN + heart_size + 6],
         'bar': [bar_x0, bar_x1],
         'duration': duration,

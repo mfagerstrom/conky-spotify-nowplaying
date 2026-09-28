@@ -218,7 +218,6 @@ local function draw_lyrics(cr, l, s, pos)
     cairo_save(cr)
     cairo_rectangle(cr, x0, top, x1 - x0, row * 3)
     cairo_clip(cr)
-    cairo_set_font_size(cr, 11 * 96 / 72 * s)
     local centre = top + row * 1.5
     for i = math.max(1, idx - 2), math.min(#lines, idx + 2) do
         local y = centre + (i - scroll) * row
@@ -228,6 +227,9 @@ local function draw_lyrics(cr, l, s, pos)
         local bold = lyrics.synced and i == idx
         cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL,
                                bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL)
+        -- 11 pt, growing smoothly to 13 pt as a line scrolls into the middle (current) row
+        local pt = 11 + (lyrics.synced and 2 * math.max(0, 1 - dist) or 0)
+        cairo_set_font_size(cr, pt * 96 / 72 * s)
         cairo_set_source_rgba(cr, 1, 1, 1, a)
         cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row
         show_text_with_notes(cr, ellipsize(cr, lines[i][2], x1 - x0), bold)
