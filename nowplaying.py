@@ -173,11 +173,19 @@ def fetch_lyrics(track_id, artist, title, album, duration):
         record = _lrclib('get', artist_name=artist, track_name=title, album_name=album,
                          duration=int(duration))
         if not record or not (record.get('syncedLyrics') or record.get('plainLyrics')):
+            # Prefer a version within 3 s of Spotify's length; otherwise accept one within
+            # 20 s (a different edit of the song -- lines may drift a little, but lyrics
+            # that drift beat no lyrics).
             hits = [h for h in (_lrclib('search', track_name=title, artist_name=artist) or [])
-                    if (h.get('syncedLyrics') or h.get('plainLyrics'))
-                    and abs((h.get('duration') or 0) - duration) <= 3]
-            hits.sort(key=lambda h: (not h.get('syncedLyrics'), abs(h['duration'] - duration)))
-            record = hits[0] if hits else None
+                    if (h.get('syncedLyrics') or h.get('plainLyrics'))]
+            for tolerance in (3, 20):
+                close = [h for h in hits if abs((h.get('duration') or 0) - duration) <= tolerance]
+                if close:
+                    close.sort(key=lambda h: (not h.get('syncedLyrics'), abs(h['duration'] - duration)))
+                    record = close[0]
+                    break
+            else:
+                record = None
     except Exception:
         with state.lock:
             if state.track == track_id:
