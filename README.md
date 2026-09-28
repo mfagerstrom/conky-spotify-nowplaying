@@ -72,6 +72,13 @@ Run straight from a checkout, no install needed (dependencies as listed in `pack
 bin/conky-spotify-nowplaying start
 ```
 
+Run the unit tests (standard library `unittest`, same dependencies as above; they use
+temporary directories and never touch `~/.cache`, `~/.config` or the network):
+
+```sh
+python3 -m unittest discover -s tests
+```
+
 Build the package into `dist/` (needs `sudo apt install debhelper devscripts`):
 
 ```sh
