@@ -19,12 +19,28 @@ LIKED_FILE = os.path.join(CACHE_DIR, 'liked')
 TOGGLED_FILE = LIKED_FILE + '-toggled'   # mtime = last click; pollers back off after it
 LOCK_FILE = LIKED_FILE + '.lock'
 LIBRARY_FILE = os.path.join(CACHE_DIR, 'library.json')
+BACKOFF_FILE = os.path.join(CACHE_DIR, 'rate-limited-until')   # epoch seconds, from Retry-After
 REDIRECT_URI = 'http://127.0.0.1:8888/callback'
 SCOPES = 'user-library-read user-library-modify'
 
 
 class NotLoggedIn(Exception):
     pass
+
+
+class RateLimited(Exception):
+    """Spotify answered 429; no requests are sent until `until` (epoch seconds)."""
+    def __init__(self, until):
+        super().__init__(f'rate limited for {until - time.time():.0f} more seconds')
+        self.until = until
+
+
+def rate_limited_until():
+    try:
+        until = float(open(BACKOFF_FILE).read())
+    except (OSError, ValueError):
+        return None
+    return until if until > time.time() else None
 
 
 def client_id():
@@ -113,11 +129,24 @@ def access_token():
 
 
 def api(method, path, **params):
+    # Requests made while rate limited can extend the penalty, so don't send any.
+    until = rate_limited_until()
+    if until:
+        raise RateLimited(until)
     url = 'https://api.spotify.com/v1' + path + ('?' + urllib.parse.urlencode(params) if params else '')
     req = urllib.request.Request(url, method=method, headers={'Authorization': 'Bearer ' + access_token()})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        body = r.read()
-        return json.loads(body) if body else None
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = r.read()
+            return json.loads(body) if body else None
+    except urllib.error.HTTPError as e:
+        if e.code != 429:
+            raise
+        until = time.time() + int(e.headers.get('Retry-After') or 60)
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(BACKOFF_FILE, 'w') as f:
+            f.write(str(until))
+        raise RateLimited(until)
 
 
 def current_track_uri():
@@ -182,7 +211,7 @@ def _index_page(lib, items):
     return new
 
 
-def refresh_library(max_age=6 * 3600):
+def refresh_library(max_age=24 * 3600):
     """Full rescan when the index is missing, stale, or the library shrank (unlikes made
     elsewhere); otherwise just pick up the newest likes from the first page."""
     lib = _load_library()
@@ -218,6 +247,14 @@ def write_liked(value):
     os.replace(LIKED_FILE + '.tmp', LIKED_FILE)
 
 
+def _notify_rate_limited(until):
+    hours = (until - time.time()) / 3600
+    wait = f'{hours:.1f} hours' if hours >= 1 else f'{max(hours * 60, 1):.0f} minutes'
+    subprocess.run(['notify-send', '-a', 'Spotify Now Playing', 'Spotify Now Playing',
+                    f'Spotify is rate limiting the like button; it will work again in about {wait}.'],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def toggle():
     """Flip the heart immediately, then make Spotify match it.
 
@@ -228,26 +265,37 @@ def toggle():
     uri = current_track_uri()
     if not uri:
         return
+    until = rate_limited_until()
+    if until:
+        _notify_rate_limited(until)
+        return
     os.makedirs(os.path.dirname(LIKED_FILE), exist_ok=True)
     with open(LOCK_FILE, 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        shown = open(LIKED_FILE).read().strip() if os.path.exists(LIKED_FILE) else ''
-        liked = (shown == '1') if shown in ('0', '1') else is_liked_any(uri)
-        write_liked(not liked)
-        open(TOGGLED_FILE, 'w').close()
-        want = open(LIKED_FILE).read().strip() == '1'
-        lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}
-        key = track_key(uri)
-        if want:
-            api('PUT', '/me/library', uris=uri)
-            lib['keys'].setdefault(key, [])
-            if uri not in lib['keys'][key]:
-                lib['keys'][key].append(uri)
-        else:
-            # unliking removes every saved release of the song, or the heart would stay on
-            uris = sorted(set(lib['keys'].pop(key, [])) | {uri})
-            api('DELETE', '/me/library', uris=','.join(uris))
-        _save_library(lib)
+        try:
+            shown = open(LIKED_FILE).read().strip() if os.path.exists(LIKED_FILE) else ''
+            liked = (shown == '1') if shown in ('0', '1') else is_liked_any(uri)
+            write_liked(not liked)
+            open(TOGGLED_FILE, 'w').close()
+            _push_like(uri, open(LIKED_FILE).read().strip() == '1')
+        except RateLimited as e:
+            write_liked(None)   # unknown: we couldn't read or change it
+            _notify_rate_limited(e.until)
+
+
+def _push_like(uri, want):
+    lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}
+    key = track_key(uri)
+    if want:
+        api('PUT', '/me/library', uris=uri)
+        lib['keys'].setdefault(key, [])
+        if uri not in lib['keys'][key]:
+            lib['keys'][key].append(uri)
+    else:
+        # unliking removes every saved release of the song, or the heart would stay on
+        uris = sorted(set(lib['keys'].pop(key, [])) | {uri})
+        api('DELETE', '/me/library', uris=','.join(uris))
+    _save_library(lib)
 
 
 def recently_toggled(seconds=15):

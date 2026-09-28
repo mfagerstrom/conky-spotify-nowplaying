@@ -8,6 +8,7 @@ A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Co
 - Smoothly scrolling synced lyrics from [LRCLIB](https://lrclib.net): previous, current and next line
 - Background colour taken from the album art, fading between tracks
 - Drag the widget anywhere, on any monitor; its position is remembered
+- Top-bar icon with the current track, start-at-login toggle and Quit
 
 ## Install
 
@@ -16,10 +17,13 @@ Download the latest `.deb` from the
 with apt, which also pulls in the dependencies (Conky, playerctl, Python GObject bindings, fonts):
 
 ```sh
-sudo apt install ./conky-spotify-nowplaying_1.0.0_all.deb
+sudo apt install ./conky-spotify-nowplaying_1.0.1_all.deb
 ```
 
 Then open **Spotify Now Playing** from the app grid. Opening it again stops the widget.
+
+While it runs there's an icon in the top bar: click it to see the current track, toggle
+**Start at login**, or **Quit**.
 
 Right-click the app icon for more:
 
@@ -56,6 +60,10 @@ No client secret is needed (PKCE). The refresh token is stored in
 The heart shows a song as liked when any release of it is saved (single, album version, ...),
 matching the Spotify app; unliking from the widget removes every saved release.
 
+Spotify's limits for new developer apps are low. If Spotify rate-limits the app, the widget
+stops calling the API until the block lifts (the heart turns grey, and clicking it tells you
+how long); everything else keeps working.
+
 ## Development
 
 Run straight from a checkout, no install needed (dependencies as listed in `packaging/control`):
@@ -81,7 +89,8 @@ The version comes from `VERSION`.
 | `src/nowplaying.py` | Reads Spotify via `playerctl` (MPRIS), fetches art/lyrics/like state, writes the widget text plus geometry for `draw.lua` and click areas for `conky-mouse.py` |
 | `src/draw.lua` | Cairo drawing: background, buttons, seek bar, lyric scrolling (20 fps) |
 | `src/conky-mouse.py` | Handles clicks and dragging (Conky's own mouse hook gets no button presses under XWayland) and keeps the window at its saved position |
-| `src/spotify_api.py` | Minimal Spotify Web API client (PKCE login, like/unlike, Liked Songs index) |
+| `src/spotify_api.py` | Minimal Spotify Web API client (PKCE login, like/unlike, Liked Songs index, rate-limit backoff) |
+| `src/tray.py` | Top-bar (AppIndicator) icon: current track, start at login, Quit |
 | `packaging/`, `build-deb.sh` | Debian package: desktop entry, icon, control file |
 
 Settings live in `~/.config/conky-spotify-nowplaying/` (`position`, `spotify-client-id`,

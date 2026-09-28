@@ -50,7 +50,7 @@ TIME_FONT = 'Ubuntu Sans 11'
 CONTROL_ROW_FONT = 'DejaVu Sans 15'            # only sets the controls row's height
 SKIP_SIZE, PLAY_SIZE, CONTROL_GAP = 14, 24, 12
 LYRIC_ROWS = 3
-LIKE_POLL_SECONDS = 10
+LIKE_POLL_SECONDS = 30
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
 
 _pango = PangoCairo.FontMap.get_default().create_context()
@@ -155,6 +155,8 @@ def fetch_liked(track_id):
     if spotify_api.recently_toggled():
         log(f'like check skipped (recent click): {track_id}')
         return
+    if spotify_api.rate_limited_until():
+        return                                   # heart stays unknown (grey) until it lifts
     uri = None
     try:
         uri = spotify_api.current_track_uri()
@@ -433,10 +435,10 @@ def write_lyrics(track_id, duration):
 
 
 def library_loop():
-    """Keeps spotify_api's Liked Songs index fresh (full scan at start / every 6 h, newest
+    """Keeps spotify_api's Liked Songs index fresh (full scan when missing / daily, newest
     likes every minute), then re-checks the heart so it reflects likes made in the app."""
     while True:
-        if os.path.exists(spotify_api.TOKEN_FILE):
+        if os.path.exists(spotify_api.TOKEN_FILE) and not spotify_api.rate_limited_until():
             try:
                 spotify_api.refresh_library()
                 with state.lock:

@@ -63,7 +63,7 @@ def start():
     log = open(os.path.join(CACHE, 'run.log'), 'a')
     subprocess.Popen([sys.executable, os.path.realpath(__file__), '_run'],
                      start_new_session=True, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                     env=dict(os.environ, CSN_DIR=APP_DIR))
+                     env=dict(os.environ, CSN_DIR=APP_DIR, CSN_LAUNCHER=os.path.realpath(__file__)))
     print('started')
 
 
@@ -90,8 +90,10 @@ def supervise():
         ('nowplaying', [py, os.path.join(APP_DIR, 'nowplaying.py')]),
         ('conky', ['conky', '-c', os.path.join(APP_DIR, 'conky.conf')]),
         ('mouse', [py, os.path.join(APP_DIR, 'conky-mouse.py')]),
+        ('tray', [py, os.path.join(APP_DIR, 'tray.py')]),
     ]
     children = {}
+    given_up = set()   # exited with 78: can't run here (e.g. tray library missing)
     stopping = False
 
     def shutdown(*_):
@@ -104,7 +106,10 @@ def supervise():
     while not stopping:
         for name, cmd in specs:
             proc = children.get(name)
-            if proc and proc.poll() is None:
+            if name in given_up or (proc and proc.poll() is None):
+                continue
+            if proc and proc.returncode == 78:
+                given_up.add(name)
                 continue
             if time.monotonic() - last_start.get(name, -10) < 2:   # don't spin if it keeps dying
                 continue
