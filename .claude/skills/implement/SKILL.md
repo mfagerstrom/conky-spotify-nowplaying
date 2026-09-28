@@ -132,12 +132,19 @@ Run the static checks in
 the branch. Fix everything they report.
 
 A change that touches `src/`, `bin/`, `packaging/` or `debian/` is then run,
-per the same section. From the checkout, which uses `src/` next to the
-launcher:
+per the same section, from the checkout, whose launcher uses the `src/` next
+to it.
+
+Only one widget runs per desktop, and every copy shares one pid file, so
+`stop` stops whichever copy is running. Look first: a widget running from
+another worktree's `src/` is another session's test, and this one waits for
+it rather than stopping it. For a visual change, take the before capture now,
+while the installed copy is still up.
 
 ```bash
-bin/conky-spotify-nowplaying status     # note it: the widget is put back afterwards
-bin/conky-spotify-nowplaying stop       # stops whichever copy runs; they share a pid file
+pgrep -af 'nowplaying.py'               # which copy runs, if any: note it
+scripts/capture-widget.py <scratchpad>/widget-before.png   # visual changes only
+bin/conky-spotify-nowplaying stop
 : > ~/.cache/conky-spotify-nowplaying/run.log
 bin/conky-spotify-nowplaying start
 pgrep -af 'conky-spotify-nowplaying|nowplaying.py|conky-mouse.py|^conky '
@@ -147,9 +154,9 @@ grep -iE 'error|traceback|lua' ~/.cache/conky-spotify-nowplaying/run.log
 The processes should run from this worktree's `src/`, and the log should hold
 nothing but the harmless `libayatana-appindicator is deprecated` warning.
 
-Anything that changes how the widget looks gets a capture, read with the
-`Read` tool before the change is called done, and compared with one taken
-from the installed copy before the change when the difference is subtle:
+Anything that changes how the widget looks gets a capture of the change, read
+with the `Read` tool next to the before capture, before the change is called
+done:
 
 ```bash
 scripts/capture-widget.py <scratchpad>/widget-after.png
@@ -164,7 +171,7 @@ Afterwards, put the user's widget back the way it was:
 
 ```bash
 bin/conky-spotify-nowplaying stop
-conky-spotify-nowplaying start          # only if status said it was running
+conky-spotify-nowplaying start          # only if the installed copy was running
 ```
 
 A change to documentation, skills or `scripts/` alone owes no run, and the pull
