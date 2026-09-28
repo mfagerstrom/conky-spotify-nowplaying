@@ -39,9 +39,10 @@ Every command must exit 0 and print nothing, apart from the test summary
 
 ## A build, when packaging could break
 
-A change that touches `debian/` or `packaging/`, or adds, removes or renames a
-file under `src/` or `bin/`, also builds the package, since only a build shows
-a file `debian/install` names that is not there:
+A change that touches `debian/`, `packaging/` or `build-deb.sh`, or adds,
+removes or renames a file under `src/` or `bin/`, also builds the package,
+since only a build shows a file `debian/install` names that is not there, or a
+build script that parses but does not run:
 
 ```bash
 ./build-deb.sh
