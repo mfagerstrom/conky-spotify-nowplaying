@@ -71,7 +71,8 @@ entry to the user and get the version confirmed.
 All must pass before building:
 
 ```bash
-python3 -m py_compile src/*.py bin/conky-spotify-nowplaying
+python3 -m py_compile src/*.py bin/conky-spotify-nowplaying scripts/*.py
+python3 scripts/catchup_test.py
 sh -n build-deb.sh release-ppa.sh
 desktop-file-validate packaging/conky-spotify-nowplaying.desktop
 dpkg-parsechangelog -S Version        # prints the new X.Y.Z
@@ -147,29 +148,31 @@ only the user types it:
 ./release-ppa.sh
 ```
 
-It ends with `Successfully uploaded packages.` Then follow Launchpad through
-its public API. Accepting the upload takes a few minutes, the build about two,
-and publishing another 10-30:
+It ends with `Successfully uploaded packages.` Then record the version in the
+session's ledger and let the one watcher follow Launchpad, per
+[run-watch.md](../_shared/run-watch.md#waiting-on-a-launchpad-build).
+Accepting the upload takes a few minutes, the build about two, and publishing
+another 10-30:
 
 ```bash
-B=https://api.launchpad.net/devel/~mfagerstrom/+archive/ubuntu/conky-spotify-nowplaying
-curl -s "$B?ws.op=getPublishedSources" | python3 -c "import json,sys; [print(e['source_package_version'], e['status']) for e in json.load(sys.stdin)['entries']]"
-curl -s "$B?ws.op=getBuildRecords"     | python3 -c "import json,sys; [print(e['title'], '|', e['buildstate'], '|', e['build_log_url']) for e in json.load(sys.stdin)['entries']]"
+scripts/catchup.py add-lp <ledger> X.Y.Z "release X.Y.Z"
+scripts/catchup.py wait <ledger>        # background Bash call; end the turn
 ```
 
-Move the session to `Tests Running` once the upload succeeds, and back to
-`Working` once the build settles, before reading its result.
-Check a few times spaced minutes apart, or when the user asks - no tight
-polling loops. Launchpad's emails go to the no-reply maintainer address, so
-nobody is notified; this is the only way to know.
+`add-lp` prints the move to `Tests Running`, and the `wait` that settles the
+row prints the move back to `Working`; make each move as soon as it is read.
+Launchpad's emails go to the no-reply maintainer address, so nobody is
+notified; the watcher is the only way to know.
 
-- Source `Published` and build `Successfully built` -> done.
-- Build `Failed to build` -> read the build log (`build_log_url`), fix,
-  and release the next patch version. Launchpad build machines sometimes fail
-  for their own reasons; if the log shows nothing wrong with the package, the
-  user can press **Retry** on the build page.
-- Upload never appears -> it was rejected (usually a reused version or a
-  signature problem); check the version and `release-ppa.sh`'s signing key.
+- `lp: X.Y.Z published` -> done.
+- `lp: X.Y.Z failed` -> read the build log linked in the tally, fix, and
+  release the next patch version. Launchpad build machines sometimes fail for
+  their own reasons; if the log shows nothing wrong with the package, the user
+  can press **Retry** on the build page, and the version is recorded again
+  with `add-lp`.
+- `lp: X.Y.Z rejected` -> the upload never appeared (usually a reused version
+  or a signature problem); check the version and `release-ppa.sh`'s signing
+  key.
 
 ## 8. Report
 
