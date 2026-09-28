@@ -53,7 +53,7 @@ SKIP_SIZE, PLAY_SIZE, CONTROL_GAP = 14, 24, 12
 WINDOW_BUTTON_SIZE = 10                       # minimize / close icons, right of the heart
 WINDOW_BUTTON_PITCH = 22                      # centre to centre, and each one's hit width
 HEART_PITCH = 25                              # heart centre to minimize centre
-HEART_WIDTH = 16                              # the heart draw.lua strokes, about the old ♡ glyph's size
+HEART_WIDTH = 16                              # the heart draw.lua strokes, as wide as HEART_FONT's ♡
 LYRIC_ROWS = 3
 LIKE_POLL_SECONDS = 30
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
@@ -317,7 +317,8 @@ def top_buttons():
     close_cx = MARGIN + TEXT_WIDTH - WINDOW_BUTTON_SIZE / 2
     min_cx = close_cx - WINDOW_BUTTON_PITCH
     heart_cx = min_cx - HEART_PITCH
-    # Where conky drew the heart as text: the row's baseline sits at its bottom (measured).
+    # Centred on HEART_FONT's ♡ ink in the top row, whose height that font sets; conky puts
+    # the row's baseline at its bottom (measured).
     ink = ink_extents('♡', HEART_FONT)
     cy = (MARGIN - LABEL_LIFT + line_height(LABEL_FONT, HEART_FONT) - font_ascent(HEART_FONT)
           + ink.y + ink.height / 2)
