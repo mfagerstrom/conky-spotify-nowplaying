@@ -75,4 +75,8 @@ def response(body):
 
 
 def http_error(code, headers=None):
-    return urllib.error.HTTPError('https://example.test/', code, 'error', headers or {}, None)
+    # HTTPError is a temporary file wrapper that warns when collected unclosed. The code
+    # under test reads only its status and headers, so it is closed up front.
+    e = urllib.error.HTTPError('https://example.test/', code, 'error', headers or {}, None)
+    e.close()
+    return e
