@@ -82,8 +82,8 @@ commit, and the kind label says the rest.
 
 Lower case after the area except for names (Spotify, LRCLIB, Conky), no
 trailing period, present tense, specific enough to recognise without opening
-the issue. `lyrics are broken` is not a
-description; `synced lines drift behind the track after a seek` is.
+the issue. `lyrics are broken` is not a description;
+`synced lines drift behind the track after a seek` is.
 
 ## 3. Body
 
@@ -222,9 +222,10 @@ works an issue under whatever title it has.
    from the view it belongs in.
 4. Keep the description's meaning: drop the verb prefix and keep the words that
    carry information.
-5. Show the user the whole old-to-new list before applying it. Then create
-   each area label the list uses, per section 5, and apply one issue at a
-   time, title and label together, reading the labels back:
+5. Show the user the whole old-to-new list before applying it, with the
+   titles from step 2 that only gain a label. Then create each area label the
+   pass adds, per section 5, and apply one issue at a time, title and label
+   together, reading the labels back:
 
    ```bash
    gh issue edit <n> --title "<new title>" --add-label "<area>"
