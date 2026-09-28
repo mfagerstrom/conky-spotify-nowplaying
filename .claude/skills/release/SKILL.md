@@ -76,7 +76,8 @@ then
 dpkg-parsechangelog -S Version        # prints the new X.Y.Z
 ```
 
-There is no Lua checker installed; `draw.lua` and `conky.conf` errors show up in the smoke test.
+There is no Lua checker installed; `draw.lua` and `conky.conf` errors show up
+in the smoke test.
 
 ## 4. Build and smoke-test the installed package
 

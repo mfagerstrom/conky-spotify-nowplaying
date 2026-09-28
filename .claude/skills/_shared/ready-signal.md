@@ -92,9 +92,12 @@ union kept.
 
 A pull request cut from another unmerged branch, per `/new-branch`, targets
 that parent branch. This repository does not delete branches on merge, so
-GitHub never moves the child to `main` when the parent merges. When the
-watcher prints the parent's `pr: <number> merged`, retarget the child before
-anything else, and read its mergeability again:
+GitHub never moves the child to `main` when the parent merges. When the child
+is opened, record the parent in the session's ledger with
+`scripts/catchup.py add-pr`, unless it is there already, since a parent
+another session opened is not. When the watcher prints the parent's
+`pr: <number> merged`, retarget the child before anything else, and read its
+mergeability again:
 
 ```bash
 gh api -X PATCH repos/{owner}/{repo}/pulls/<child> -f base=main
