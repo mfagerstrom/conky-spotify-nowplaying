@@ -199,5 +199,56 @@ class Forwarder(Ledger):
         self.assertTrue(push.fold(lines[0]))
 
 
+class PushOff(Ledger):
+    """A Push that could not reach GitHub reads nothing, and wait carries on by the timer."""
+
+    def test_wait_settles_on_the_timer_when_github_gives_no_answer(self):
+        pr = {'url': 'https://example.test/pull/7', 'state': 'OPEN'}
+        merged = dict(pr, state='MERGED', mergedAt='2026-09-28T18:29:11Z',
+                      closedAt='2026-09-28T18:29:11Z', mergeCommit={'oid': 'abcdef1234567'})
+        slept = []
+
+        def answer(*args, timeout=None):
+            if args[:2] == ('extension', 'list'):
+                return catchup.EXTENSION
+            if args[:2] == ('repo', 'view'):
+                raise RuntimeError('no answer in 10s')
+            if args[:2] == ('pr', 'view'):
+                return json.dumps(merged if slept else pr)
+            raise AssertionError(f'unexpected gh call: {args}')
+
+        out = io.StringIO()
+        with mock.patch.object(catchup, 'gh', side_effect=answer), \
+                mock.patch.object(catchup.time, 'sleep', side_effect=slept.append), \
+                mock.patch.object(catchup.signal, 'signal'), \
+                contextlib.redirect_stdout(out):
+            catchup.add_pr(self.ledger, '7', 'pull request 7')
+            push = catchup.Push()
+            self.assertFalse(push.usable)
+            self.assertTrue(push.retryable)
+            self.assertFalse(push.read())
+            push.stop()
+            catchup.wait(self.ledger, 0)
+        self.assertEqual(len(slept), 1)
+        self.assertEqual(catchup.read_ledger(self.ledger)[0]['state'], 'done')
+        self.assertIn('push: off, reading on the timer only', out.getvalue())
+
+    def test_a_failed_extension_listing_is_retried(self):
+        with mock.patch.object(catchup, 'gh', side_effect=RuntimeError('no answer in 60s')), \
+                contextlib.redirect_stdout(io.StringIO()):
+            push = catchup.Push()
+        self.assertFalse(push.usable)
+        self.assertTrue(push.retryable)
+        self.assertFalse(push.read())
+
+    def test_a_missing_extension_is_not_retried(self):
+        with mock.patch.object(catchup, 'gh', return_value='cli/gh-copilot\n'), \
+                contextlib.redirect_stdout(io.StringIO()):
+            push = catchup.Push()
+        self.assertFalse(push.usable)
+        self.assertFalse(push.retryable)
+        self.assertFalse(push.read())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -442,13 +442,16 @@ def reconcile_rows(path, keys=None, issues_only=False):
 # The shared forwarder
 
 def installed():
-    """Whether gh has the forwarder extension. It is never installed from here."""
+    """Whether gh has the forwarder extension, or None when gh gave no answer.
+
+    It is never installed from here.
+    """
     try:
         if EXTENSION in gh('extension', 'list', timeout=60):
             return True
     except RuntimeError as e:
         print(f'push: could not list gh extensions: {e}')
-        return False
+        return None
     print(f'push: {EXTENSION} is not installed; install it by hand to get push notices')
     return False
 
@@ -467,6 +470,7 @@ class Push:
         self.retryable = False
         self.usable = installed()
         if not self.usable:
+            self.usable, self.retryable = False, self.usable is None
             return
         try:
             self.repo = gh('repo', 'view', '--json', 'nameWithOwner',
@@ -673,6 +677,9 @@ class Push:
 
     def read(self):
         """Fold the notices added since the last read into seen. True if a forwarder connected."""
+        # An unusable Push stopped before it had an events file to read.
+        if not self.usable:
+            return False
         connected = False
         for line in self.new_lines():
             connected = self.fold(line) or connected
