@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Builds the conky now-playing widget's contents.
 
-Four times a second this writes ~/.cache/conky-nowplaying/widget.txt as conky markup,
+Four times a second this writes ~/.cache/conky-spotify-nowplaying/widget.txt as conky markup,
 which conky.conf renders with ${execpi}. It covers:
   - title/artist, wrapped to the widget's fixed column width (measured with Pango,
     using the same fonts conky draws with)
@@ -20,7 +20,7 @@ import colorsys
 
 import spotify_api
 
-CACHE = os.path.expanduser('~/.cache/conky-nowplaying')
+CACHE = os.path.expanduser('~/.cache/conky-spotify-nowplaying')
 OUT = os.path.join(CACHE, 'widget.txt')
 COVER = os.path.join(CACHE, 'cover.jpg')
 REGIONS = os.path.join(CACHE, 'regions.json')
@@ -172,7 +172,7 @@ def fetch_liked(track_id):
 
 def _lrclib(path, **params):
     req = urllib.request.Request(f'https://lrclib.net/api/{path}?' + urllib.parse.urlencode(params),
-                                 headers={'User-Agent': 'conky-nowplaying (personal desktop widget)'})
+                                 headers={'User-Agent': 'conky-spotify-nowplaying (https://github.com/mfagerstrom/conky-spotify-nowplaying)'})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.load(r)

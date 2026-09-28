@@ -8,7 +8,7 @@
 require 'cairo'
 pcall(require, 'cairo_xlib')
 
-local cache = os.getenv('HOME') .. '/.cache/conky-nowplaying/'
+local cache = os.getenv('HOME') .. '/.cache/conky-spotify-nowplaying/'
 local hover_x, hover_y = -1, -1
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
 local clock = {stamp = nil, pos = 0, playing = false}

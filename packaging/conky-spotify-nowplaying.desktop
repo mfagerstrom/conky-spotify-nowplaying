@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Name=Spotify Now Playing
+GenericName=Now Playing Widget
+Comment=Desktop widget with the current Spotify track, controls, likes and lyrics
+Exec=conky-spotify-nowplaying
+Icon=conky-spotify-nowplaying
+Terminal=false
+StartupNotify=false
+Categories=AudioVideo;Audio;Utility;
+Keywords=spotify;conky;widget;lyrics;music;now playing;
+Actions=autostart-on;autostart-off;login;
+
+[Desktop Action autostart-on]
+Name=Start at login
+Exec=conky-spotify-nowplaying autostart on
+
+[Desktop Action autostart-off]
+Name=Don't start at login
+Exec=conky-spotify-nowplaying autostart off
+
+[Desktop Action login]
+Name=Log in to Spotify (like button)
+Exec=conky-spotify-nowplaying login

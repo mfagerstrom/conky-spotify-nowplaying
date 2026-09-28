@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Spotify now-playing desktop widget (Conky).
+
+usage: conky-spotify-nowplaying [command]
+
+  (no command)     start the widget, or stop it if it is already running
+  start | stop | restart | status
+  login            log in to Spotify for the like button
+  autostart on     start the widget when you log in
+  autostart off    don't
+"""
+import os, shutil, signal, subprocess, sys, time
+
+NAME = 'conky-spotify-nowplaying'
+HERE = os.path.dirname(os.path.realpath(__file__))
+# Installed: /usr/share/<name>. Running from a checkout: ../src next to this script.
+# (Check for our own file: installed in /usr/bin, ../src is /usr/src, which always exists.)
+CHECKOUT_SRC = os.path.join(HERE, '..', 'src')
+APP_DIR = os.environ.get('CSN_DIR') or (
+    CHECKOUT_SRC if os.path.isfile(os.path.join(CHECKOUT_SRC, 'nowplaying.py'))
+    else f'/usr/share/{NAME}')
+APP_DIR = os.path.realpath(APP_DIR)
+CONF = os.path.expanduser(f'~/.config/{NAME}')
+CACHE = os.path.expanduser(f'~/.cache/{NAME}')
+PIDFILE = os.path.join(CACHE, 'run.pid')
+AUTOSTART = os.path.expanduser(f'~/.config/autostart/{NAME}.desktop')
+OLD_CONF = os.path.expanduser('~/.config/conky')   # pre-package installs kept state here
+STATE_FILES = ('position', 'spotify-client-id', 'spotify-token.json')
+
+
+def notify(msg):
+    subprocess.run(['notify-send', '-a', 'Spotify Now Playing', 'Spotify Now Playing', msg],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def running_pid():
+    try:
+        pid = int(open(PIDFILE).read())
+        # make sure the pid is still our supervisor, not a recycled pid
+        cmdline = open(f'/proc/{pid}/cmdline', 'rb').read().split(b'\0')
+        if any(NAME.encode() in part for part in cmdline) and b'_run' in cmdline:
+            return pid
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def migrate():
+    """Copy login/Client ID/position from the old ~/.config/conky layout, once."""
+    os.makedirs(CONF, exist_ok=True)
+    for f in STATE_FILES:
+        old, new = os.path.join(OLD_CONF, f), os.path.join(CONF, f)
+        if os.path.isfile(old) and not os.path.lexists(new):
+            shutil.copy2(old, new)
+
+
+def start():
+    if running_pid():
+        print('already running')
+        return
+    migrate()
+    os.makedirs(CACHE, exist_ok=True)
+    log = open(os.path.join(CACHE, 'run.log'), 'a')
+    subprocess.Popen([sys.executable, os.path.realpath(__file__), '_run'],
+                     start_new_session=True, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                     env=dict(os.environ, CSN_DIR=APP_DIR))
+    print('started')
+
+
+def stop():
+    pid = running_pid()
+    if not pid:
+        print('not running')
+        return False
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(50):
+        if not running_pid():
+            break
+        time.sleep(0.1)
+    print('stopped')
+    return True
+
+
+def supervise():
+    """Runs the contents generator, conky and the mouse helper; restarts any that exit."""
+    with open(PIDFILE, 'w') as f:
+        f.write(str(os.getpid()))
+    py = sys.executable
+    specs = [
+        ('nowplaying', [py, os.path.join(APP_DIR, 'nowplaying.py')]),
+        ('conky', ['conky', '-c', os.path.join(APP_DIR, 'conky.conf')]),
+        ('mouse', [py, os.path.join(APP_DIR, 'conky-mouse.py')]),
+    ]
+    children = {}
+    stopping = False
+
+    def shutdown(*_):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    last_start = {}
+    while not stopping:
+        for name, cmd in specs:
+            proc = children.get(name)
+            if proc and proc.poll() is None:
+                continue
+            if time.monotonic() - last_start.get(name, -10) < 2:   # don't spin if it keeps dying
+                continue
+            children[name] = subprocess.Popen(cmd, cwd=APP_DIR)
+            last_start[name] = time.monotonic()
+            if name == 'nowplaying':
+                time.sleep(1)   # let it write the first widget.txt before conky reads it
+        time.sleep(0.5)
+    for proc in children.values():
+        if proc.poll() is None:
+            proc.terminate()
+    for proc in children.values():
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    try:
+        os.remove(PIDFILE)
+    except OSError:
+        pass
+
+
+def autostart(on):
+    if on:
+        exe = shutil.which(NAME) or os.path.realpath(__file__)
+        os.makedirs(os.path.dirname(AUTOSTART), exist_ok=True)
+        with open(AUTOSTART, 'w') as f:
+            f.write('[Desktop Entry]\n'
+                    'Type=Application\n'
+                    'Name=Spotify Now Playing\n'
+                    'Comment=Spotify now-playing desktop widget\n'
+                    f'Exec={exe} start\n'
+                    f'Icon={NAME}\n'
+                    'X-GNOME-Autostart-Delay=5\n'
+                    'NoDisplay=true\n')
+        print('will start at login')
+    else:
+        if os.path.exists(AUTOSTART):
+            os.remove(AUTOSTART)
+        print('will not start at login')
+
+
+def main():
+    args = sys.argv[1:]
+    cmd = args[0] if args else 'toggle'
+    if cmd == 'toggle':
+        if not stop():
+            start()
+        else:
+            notify('Widget stopped. Open the app again to bring it back.')
+    elif cmd == 'start':
+        start()
+    elif cmd == 'stop':
+        stop()
+    elif cmd == 'restart':
+        stop()
+        start()
+    elif cmd == 'status':
+        print('running' if running_pid() else 'not running')
+        print('starts at login' if os.path.exists(AUTOSTART) else 'does not start at login')
+    elif cmd == 'login':
+        os.execv(sys.executable, [sys.executable, os.path.join(APP_DIR, 'spotify_api.py'), 'login'])
+    elif cmd == 'autostart' and len(args) == 2 and args[1] in ('on', 'off'):
+        autostart(args[1] == 'on')
+    elif cmd == '_run':
+        supervise()
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == '__main__':
+    main()

@@ -5,3 +5,4 @@ __pycache__/
 position
 spotify-client-id
 spotify-token.json
+dist/

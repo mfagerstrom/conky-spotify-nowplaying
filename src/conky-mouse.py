@@ -11,18 +11,19 @@ helper subscribes to clicks on conky's window itself:
 Hit areas come from nowplaying.py (regions.json, logical px, window-relative), since the
 controls move when titles wrap.
 
-The position lives in ~/.config/conky/position (root-window x y), not in conky.conf:
+The position lives in ~/.config/conky-spotify-nowplaying/position (root-window x y), not in conky.conf:
 rewriting conky.conf makes conky reload and flash. Instead this helper keeps the window
 at the saved spot, moving it back whenever conky places it elsewhere (startup, reloads).
 """
-import ctypes, json, os, re, subprocess, time
+import ctypes, json, os, re, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-POSITION = os.path.join(HERE, 'position')
-CACHE = os.path.expanduser('~/.cache/conky-nowplaying')
+CONF = os.path.expanduser('~/.config/conky-spotify-nowplaying')
+POSITION = os.path.join(CONF, 'position')
+CACHE = os.path.expanduser('~/.cache/conky-spotify-nowplaying')
 REGIONS = os.path.join(CACHE, 'regions.json')
 SEEK_PREVIEW = os.path.join(CACHE, 'seek-preview')
-LOG = os.path.expanduser('~/.cache/conky-mouse.log')
+LOG = os.path.join(CACHE, 'mouse.log')
 BUTTON_PRESS, BUTTON1_MASK = 4, 1 << 8
 BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK = 1 << 2, 1 << 3
 
@@ -62,7 +63,7 @@ def log(msg):
 def conky_window():
     tree = subprocess.run(['xwininfo', '-root', '-tree'], capture_output=True, text=True).stdout
     for line in tree.splitlines():
-        if '("Conky" "Conky")' in line:
+        if '"ConkySpotifyNowPlaying")' in line:
             return int(line.split()[0], 16)
     return None
 
@@ -122,6 +123,7 @@ def load_position():
 
 
 def save_position(x, y):
+    os.makedirs(CONF, exist_ok=True)
     with open(POSITION, 'w') as f:
         f.write(f'{x} {y}\n')
 
@@ -212,9 +214,9 @@ def main():
                     r = regions.get(name)
                     return r and r[0] * s <= b.x <= r[2] * s and r[1] * s <= b.y <= r[3] * s
                 if hit('heart'):
-                    logged_in = os.path.exists(os.path.join(HERE, 'spotify-token.json'))
+                    logged_in = os.path.exists(os.path.join(CONF, 'spotify-token.json'))
                     action = 'toggle' if logged_in else 'login'
-                    subprocess.Popen([os.path.join(HERE, 'spotify_api.py'), action],
+                    subprocess.Popen([sys.executable, os.path.join(HERE, 'spotify_api.py'), action],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     log(f'heart: {action}')
                 elif hit('play'):

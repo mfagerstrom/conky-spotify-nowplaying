@@ -5,19 +5,20 @@
   spotify_api.py toggle   like/unlike the track currently playing in Spotify
   spotify_api.py status   print whether the current track is liked
 
-The refresh token is kept in ~/.config/conky/spotify-token.json (mode 600).
-The like state for the widget is written to ~/.cache/conky-nowplaying/liked ("1"/"0").
+The refresh token is kept in ~/.config/conky-spotify-nowplaying/spotify-token.json (mode 600).
+The like state for the widget is written to ~/.cache/conky-spotify-nowplaying/liked ("1"/"0").
 """
 import base64, fcntl, hashlib, http.server, json, os, secrets, subprocess, sys, time
 import urllib.error, urllib.parse, urllib.request
 
-CONF_DIR = os.path.expanduser('~/.config/conky')
+CONF_DIR = os.path.expanduser('~/.config/conky-spotify-nowplaying')
+CACHE_DIR = os.path.expanduser('~/.cache/conky-spotify-nowplaying')
 CLIENT_ID_FILE = os.path.join(CONF_DIR, 'spotify-client-id')
 TOKEN_FILE = os.path.join(CONF_DIR, 'spotify-token.json')
-LIKED_FILE = os.path.expanduser('~/.cache/conky-nowplaying/liked')
+LIKED_FILE = os.path.join(CACHE_DIR, 'liked')
 TOGGLED_FILE = LIKED_FILE + '-toggled'   # mtime = last click; pollers back off after it
 LOCK_FILE = LIKED_FILE + '.lock'
-LIBRARY_FILE = os.path.expanduser('~/.cache/conky-nowplaying/library.json')
+LIBRARY_FILE = os.path.join(CACHE_DIR, 'library.json')
 REDIRECT_URI = 'http://127.0.0.1:8888/callback'
 SCOPES = 'user-library-read user-library-modify'
 
@@ -41,13 +42,26 @@ def _post_token(data):
 def _store(tok, old_refresh=None):
     tok['expires_at'] = time.time() + tok.get('expires_in', 3600) - 60
     tok.setdefault('refresh_token', old_refresh)  # refresh responses may omit it
+    os.makedirs(CONF_DIR, exist_ok=True)
     fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as f:
         json.dump(tok, f)
     return tok
 
 
+SETUP_URL = 'https://github.com/mfagerstrom/conky-spotify-nowplaying#like-button-optional'
+
+
 def login():
+    if not os.path.exists(CLIENT_ID_FILE):
+        # Started from the widget's heart or the app menu, so there may be no terminal.
+        msg = ('The like button needs a Spotify app Client ID first. Opening the setup steps; '
+               f'save the ID to {CLIENT_ID_FILE}, then click the heart again.')
+        print(msg)
+        subprocess.run(['notify-send', '-a', 'Spotify Now Playing', 'Spotify Now Playing', msg],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(['xdg-open', SETUP_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        sys.exit(1)
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
     state = secrets.token_urlsafe(16)

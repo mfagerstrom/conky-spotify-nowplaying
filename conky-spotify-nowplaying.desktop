@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Conky Spotify Now Playing
-Comment=Spotify now-playing widget (conky + helpers); installed by install.sh
-Exec=sh -c "sleep 5; exec ~/.config/conky/run.sh"
-X-GNOME-Autostart-enabled=true
-NoDisplay=true
