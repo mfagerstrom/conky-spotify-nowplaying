@@ -1,3 +1,17 @@
+conky-spotify-nowplaying (1.1.0) resolute; urgency=medium
+
+  * Minimize and close buttons next to the heart; the top-bar menu and
+    opening the app again bring a minimized widget back (also: conky-
+    spotify-nowplaying show|hide).
+  * The heart is drawn like the new buttons and brightens on hover; it
+    shows an outline, not grey, while the like state is unknown.
+  * Background colour picks up a small accent colour on mostly grayscale
+    covers instead of grey or black.
+  * The app is listed once in the app grid (duplicate main category
+    removed).
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Mon, 28 Sep 2026 16:14:05 -0400
+
 conky-spotify-nowplaying (1.0.1) resolute; urgency=medium
 
   * Top-bar (AppIndicator) icon with the current track, Start at login and Quit.

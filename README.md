@@ -18,7 +18,7 @@ Download the latest `.deb` from the
 with apt, which also pulls in the dependencies (Conky, playerctl, Python GObject bindings, fonts):
 
 ```sh
-sudo apt install ./conky-spotify-nowplaying_1.0.1_all.deb
+sudo apt install ./conky-spotify-nowplaying_1.1.0_all.deb
 ```
 
 Then open **Spotify Now Playing** from the app grid. Opening it again stops the widget, or
