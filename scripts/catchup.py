@@ -170,10 +170,11 @@ def locked(path):
 def read_ledger(path):
     rows = []
     if os.path.exists(path):
-        for line in open(path):
-            if line.strip():
-                parts = line.rstrip('\n').split('\t') + [''] * len(FIELDS)
-                rows.append(dict(zip(FIELDS, parts)))
+        with open(path) as f:
+            for line in f:
+                if line.strip():
+                    parts = line.rstrip('\n').split('\t') + [''] * len(FIELDS)
+                    rows.append(dict(zip(FIELDS, parts)))
     return rows
 
 
