@@ -36,6 +36,10 @@ ART_LEFT, ART_BOTTOM = 22, 140               # artwork edges, measured from a ca
 LABEL_LIFT = 7                                # lifts NOW PLAYING to the artwork's top edge
 LYRIC_GAP = 10                                # space between controls/artwork and lyrics
 BOTTOM_TRIM = 10                              # px taken off border_inner_margin at the bottom
+                                              # (conky.conf's minimum_height is reduced to match)
+SPACER_FONT = 'Ubuntu Sans 1'
+SPACER_HEIGHT = 28                            # what conky actually adds for that spacer line (measured)
+TIME_DROP = 1                                 # timestamps sit this much below the bar's centre line
 COLUMN_WIDTH = TEXT_WIDTH - COLUMN_X - 4
 TITLE_FONT, ARTIST_FONT, LYRIC_FONT = 'Ubuntu Sans Bold 17', 'Ubuntu Sans 13', 'Ubuntu Sans 11'
 LABEL_FONT, HEART_FONT = 'Ubuntu Sans Bold 10', 'DejaVu Sans 15'
@@ -339,8 +343,8 @@ def render():
     y += push
     mid_y = y + mid_offset
     out.append(f"${{voffset {push}}}{g}${{font {conky_font(CONTROL_ROW_FONT)}}} ${{font}}"   # reserves the row height
-               f"${{goto {time_x}}}${{color}}${{font {conky_font(TIME_FONT)}}}{elapsed}"
-               f"${{alignr}}{total}${{font}}")
+               f"${{goto {time_x}}}${{voffset {TIME_DROP}}}${{color}}${{font {conky_font(TIME_FONT)}}}{elapsed}"
+               f"${{alignr}}{total}${{font}}${{voffset -{TIME_DROP}}}")
     time_w = text_width(total, TIME_FONT)      # elapsed never has more digits than total
     bar_x0 = time_x + time_w + 10
     bar_x1 = MARGIN + TEXT_WIDTH - time_w - 10
@@ -358,8 +362,10 @@ def render():
         lyric_row = line_height(LYRIC_FONT)
         top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
         gap = round(top - y)
-        for i in range(LYRIC_ROWS):
-            out.append(f"{f'${{voffset {gap}}}' if i == 0 else ''}${{font {conky_font(LYRIC_FONT)}}} ${{font}}")
+        # One tiny spacer line, pushed down so the text ends where the lyric rows end
+        # (minus the bottom trim); blank lyric-font lines leave extra slack instead.
+        push = round(gap + LYRIC_ROWS * lyric_row - SPACER_HEIGHT - BOTTOM_TRIM)
+        out.append(f"${{voffset {push}}}${{font {conky_font(SPACER_FONT)}}} ${{font}}")
         draw.append(f'lyrics {ART_LEFT} {MARGIN + TEXT_WIDTH} {y + gap} {lyric_row} {lyr_version}')
     write_atomic(DRAW, '\n'.join(draw) + '\n')
 
@@ -375,7 +381,6 @@ def render():
         'bar': [bar_x0, bar_x1],
         'duration': duration,
     })
-    out[-1] += f'${{voffset -{BOTTOM_TRIM}}}'   # halves conky's 20 px bottom padding
     return '\n'.join(out)   # no trailing newline: it would add an empty line at the bottom
 
 
