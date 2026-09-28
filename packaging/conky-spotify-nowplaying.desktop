@@ -7,7 +7,7 @@ Exec=conky-spotify-nowplaying
 Icon=conky-spotify-nowplaying
 Terminal=false
 StartupNotify=false
-Categories=AudioVideo;Audio;Utility;
+Categories=AudioVideo;Audio;
 Keywords=spotify;conky;widget;lyrics;music;now playing;
 Actions=autostart-on;autostart-off;login;
 
