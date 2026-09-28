@@ -24,8 +24,10 @@ WM_CLASS = 'ConkySpotifyNowPlaying'   # own_window_class in src/conky.conf
 
 
 def find_window():
-    tree = subprocess.run(['xwininfo', '-root', '-tree'],
-                          capture_output=True, text=True, check=True).stdout
+    run = subprocess.run(['xwininfo', '-root', '-tree'], capture_output=True, text=True)
+    if run.returncode != 0:
+        sys.exit(f'xwininfo failed: {run.stderr.strip()}')
+    tree = run.stdout
     m = re.search(rf'^\s*(0x[0-9a-f]+) .*"{WM_CLASS}"', tree, re.MULTILINE)
     return int(m.group(1), 16) if m else None
 
@@ -36,7 +38,10 @@ def main(argv):
     xid = find_window()
     if xid is None:
         sys.exit(f'no {WM_CLASS} window; is the widget running?')
-    window = GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(), xid)
+    display = Gdk.Display.get_default()
+    if display is None:
+        sys.exit('no X display; run this from the desktop session')
+    window = GdkX11.X11Window.foreign_new_for_display(display, xid)
     pixbuf = Gdk.pixbuf_get_from_window(window, 0, 0, window.get_width(), window.get_height())
     if pixbuf is None:
         sys.exit(f'could not read window {xid:#x}; is it on screen?')
