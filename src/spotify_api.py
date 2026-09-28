@@ -35,16 +35,21 @@ class RateLimited(Exception):
         self.until = until
 
 
+def _read_text(path):
+    with open(path) as f:
+        return f.read()
+
+
 def rate_limited_until():
     try:
-        until = float(open(BACKOFF_FILE).read())
+        until = float(_read_text(BACKOFF_FILE))
     except (OSError, ValueError):
         return None
     return until if until > time.time() else None
 
 
 def client_id():
-    return open(CLIENT_ID_FILE).read().strip()
+    return _read_text(CLIENT_ID_FILE).strip()
 
 
 def _post_token(data):
@@ -119,7 +124,7 @@ def login():
 
 def access_token():
     try:
-        tok = json.load(open(TOKEN_FILE))
+        tok = json.loads(_read_text(TOKEN_FILE))
     except (OSError, ValueError):
         raise NotLoggedIn
     if time.time() >= tok.get('expires_at', 0):
@@ -185,7 +190,7 @@ def track_key(uri):
 
 def _load_library():
     try:
-        return json.load(open(LIBRARY_FILE))
+        return json.loads(_read_text(LIBRARY_FILE))
     except (OSError, ValueError):
         return None
 
@@ -273,11 +278,11 @@ def toggle():
     with open(LOCK_FILE, 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            shown = open(LIKED_FILE).read().strip() if os.path.exists(LIKED_FILE) else ''
+            shown = _read_text(LIKED_FILE).strip() if os.path.exists(LIKED_FILE) else ''
             liked = (shown == '1') if shown in ('0', '1') else is_liked_any(uri)
             write_liked(not liked)
             open(TOGGLED_FILE, 'w').close()
-            _push_like(uri, open(LIKED_FILE).read().strip() == '1')
+            _push_like(uri, _read_text(LIKED_FILE).strip() == '1')
         except RateLimited as e:
             write_liked(None)   # unknown: we couldn't read or change it
             _notify_rate_limited(e.until)

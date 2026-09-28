@@ -247,7 +247,8 @@ def fetch_lyrics(key):
 
 def _read(path):
     try:
-        return open(path).read().strip()
+        with open(path) as f:
+            return f.read().strip()
     except OSError:
         return ''
 
