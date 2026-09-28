@@ -9,8 +9,8 @@ which conky.conf renders with ${execpi}. It covers:
   - the controls row: draw.lua draws the buttons and seek bar from draw.txt; click
     regions for conky-mouse.py go to regions.json
   - like state (heart), via spotify_api.py; refreshed on track change and every 10 s
-  - lyrics from LRCLIB (lrclib.net) -> lyrics.txt; draw.lua scrolls them smoothly (previous /
-    current / next line). Unsynced lyrics are spread evenly over the song and shown dimmed.
+  - synced lyrics from LRCLIB (lrclib.net) -> lyrics.txt; draw.lua scrolls them smoothly
+    (previous / current / next line). Tracks with only unsynced lyrics show none.
 """
 import json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
 import gi
@@ -24,6 +24,7 @@ CACHE = os.path.expanduser('~/.cache/conky-nowplaying')
 OUT = os.path.join(CACHE, 'widget.txt')
 COVER = os.path.join(CACHE, 'cover.jpg')
 REGIONS = os.path.join(CACHE, 'regions.json')
+LOG = os.path.join(CACHE, 'nowplaying.log')
 BG = os.path.join(CACHE, 'bg.txt')               # background colour from the album art, for draw.lua
 DRAW = os.path.join(CACHE, 'draw.txt')           # geometry + playback clock for draw.lua
 LYRICS = os.path.join(CACHE, 'lyrics.txt')       # timed lyric lines for draw.lua
@@ -90,7 +91,7 @@ class State:
         self.track = None          # mpris:trackid of the track the extras below belong to
         self.liked = None          # True / False / None (unknown or not logged in)
         self.liked_checked = 0.0
-        self.lyrics = None         # {'synced': [(sec, line)], 'plain': [line]} or {} if none
+        self.lyrics = None         # {'synced': [(sec, line)]}, or {} if there are no synced lyrics
         self.lyrics_retry = None   # time to retry a lyrics fetch that hit a network error
         self.lyrics_written = None # version of the lyrics last written to lyrics.txt
         self.lock = threading.Lock()
@@ -148,12 +149,16 @@ def fetch_cover(url):
 def fetch_liked(track_id):
     # Right after a click Spotify can still report the old state; trust the click.
     if spotify_api.recently_toggled():
+        log(f'like check skipped (recent click): {track_id}')
         return
+    uri = None
     try:
         uri = spotify_api.current_track_uri()
-        liked = spotify_api.is_liked(uri) if uri else None
-    except Exception:
+        liked = spotify_api.is_liked_any(uri) if uri else None
+        log(f'like check: {track_id} uri={uri} liked={liked}')
+    except Exception as e:
         liked = None
+        log(f'like check failed: {track_id} uri={uri} {type(e).__name__}: {e}')
     with state.lock:
         if state.track != track_id:
             return
@@ -173,22 +178,30 @@ def _lrclib(path, **params):
         raise
 
 
+def log(msg):
+    if os.path.exists(LOG) and os.path.getsize(LOG) > 512 * 1024:
+        os.replace(LOG, LOG + '.1')              # keep the log small: one rotated copy
+    with open(LOG, 'a') as f:
+        f.write(time.strftime('%T ') + msg + '\n')
+
+
 def fetch_lyrics(track_id, artist, title, album, duration):
-    """Exact match first (LRCLIB wants whole seconds), then the closest-length search hit.
+    """Synced lyrics only (unsynced ones aren't shown). Exact match first (LRCLIB wants
+    whole seconds), then the closest-length search hit with synced lyrics.
     Network errors leave state.lyrics as None so the next render retries."""
     try:
         record = _lrclib('get', artist_name=artist, track_name=title, album_name=album,
                          duration=int(duration))
-        if not record or not (record.get('syncedLyrics') or record.get('plainLyrics')):
+        if not record or not record.get('syncedLyrics'):
             # Prefer a version within 3 s of Spotify's length; otherwise accept one within
             # 20 s (a different edit of the song -- lines may drift a little, but lyrics
             # that drift beat no lyrics).
             hits = [h for h in (_lrclib('search', track_name=title, artist_name=artist) or [])
-                    if (h.get('syncedLyrics') or h.get('plainLyrics'))]
+                    if h.get('syncedLyrics')]
             for tolerance in (3, 20):
                 close = [h for h in hits if abs((h.get('duration') or 0) - duration) <= tolerance]
                 if close:
-                    close.sort(key=lambda h: (not h.get('syncedLyrics'), abs(h['duration'] - duration)))
+                    close.sort(key=lambda h: abs(h['duration'] - duration))
                     record = close[0]
                     break
             else:
@@ -206,8 +219,6 @@ def fetch_lyrics(track_id, artist, title, album, duration):
             if m:
                 synced.append((int(m[1]) * 60 + float(m[2]), m[3].strip()))
         lyrics['synced'] = synced
-    elif record and record.get('plainLyrics'):
-        lyrics['plain'] = [l.strip() for l in record['plainLyrics'].splitlines() if l.strip()]
     with state.lock:
         if state.track == track_id:
             state.lyrics = lyrics
@@ -389,26 +400,36 @@ def render():
 def write_lyrics(track_id, duration):
     """Writes lyrics.txt for draw.lua when the track's lyrics change; returns a version
     string (changes with the lyrics) or None when there are no lyrics to show."""
-    lyr = state.lyrics or {}
-    if lyr.get('synced'):
-        kind, lines = 'synced', [(t, l) for t, l in lyr['synced']]
-        if lines and lines[0][0] > 0:
-            lines.insert(0, (0.0, ''))           # before the first line: show the intro as ♪
-    elif lyr.get('plain') and duration:
-        n = len(lyr['plain'])                    # unsynced: spread lines evenly over the song
-        kind, lines = 'plain', [(i * duration / n, l) for i, l in enumerate(lyr['plain'])]
-    else:
+    lines = list((state.lyrics or {}).get('synced') or [])
+    if not lines:
         return None
-    version = f'{kind}-{abs(hash((track_id, len(lines)))) % 10**8}'
+    if lines[0][0] > 0:
+        lines.insert(0, (0.0, ''))               # before the first line: show the intro as ♪
+    version = f'{abs(hash((track_id, len(lines)))) % 10**8}'
     if state.lyrics_written != version:
         body = '\n'.join(f'{t:.2f}\t{l or "♪"}' for t, l in lines)
-        write_atomic(LYRICS, f'{kind}\n{body}\n')
+        write_atomic(LYRICS, f'synced\n{body}\n')
         state.lyrics_written = version
     return version
 
 
+def library_loop():
+    """Keeps spotify_api's Liked Songs index fresh (full scan at start / every 6 h, newest
+    likes every minute), then re-checks the heart so it reflects likes made in the app."""
+    while True:
+        if os.path.exists(spotify_api.TOKEN_FILE):
+            try:
+                spotify_api.refresh_library()
+                with state.lock:
+                    state.liked_checked = 0
+            except Exception as e:
+                log(f'library refresh failed: {type(e).__name__}: {e}')
+        time.sleep(60)
+
+
 def main():
     os.makedirs(CACHE, exist_ok=True)
+    threading.Thread(target=library_loop, daemon=True).start()
     while True:
         try:
             text = render()

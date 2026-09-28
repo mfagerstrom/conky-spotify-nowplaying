@@ -12,7 +12,7 @@ local cache = os.getenv('HOME') .. '/.cache/conky-nowplaying/'
 local hover_x, hover_y = -1, -1
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
 local clock = {stamp = nil, pos = 0, playing = false}
-local lyrics = {version = nil, synced = false, lines = {}}
+local lyrics = {version = nil, lines = {}}
 local scroll = nil                        -- eased lyric scroll position (line index)
 
 local function read(name)
@@ -41,10 +41,9 @@ end
 local function load_lyrics(version)
     if version == lyrics.version then return end
     local text = read('lyrics.txt') or ''
-    local kind = text:match('^(%S+)')
     local lines = {}
     for t, l in text:gmatch('\n([%d%.]+)\t([^\n]*)') do lines[#lines + 1] = {tonumber(t), l} end
-    lyrics = {version = version, synced = kind == 'synced', lines = lines}
+    lyrics = {version = version, lines = lines}
     scroll = nil
 end
 
@@ -222,13 +221,13 @@ local function draw_lyrics(cr, l, s, pos)
     for i = math.max(1, idx - 2), math.min(#lines, idx + 2) do
         local y = centre + (i - scroll) * row
         local dist = math.abs(i - scroll)
-        local a = lyrics.synced and (1 - math.min(dist, 1) * 0.45) or 0.55  -- unsynced: all dimmed
+        local a = 1 - math.min(dist, 1) * 0.45
         if dist > 1 then a = a * math.max(0, (1.5 - dist) / 0.5) end      -- fade out past the edge rows
-        local bold = lyrics.synced and i == idx
+        local bold = i == idx
         cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL,
                                bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL)
         -- 11 pt, growing smoothly to 13 pt as a line scrolls into the middle (current) row
-        local pt = 11 + (lyrics.synced and 2 * math.max(0, 1 - dist) or 0)
+        local pt = 11 + 2 * math.max(0, 1 - dist)
         cairo_set_font_size(cr, pt * 96 / 72 * s)
         cairo_set_source_rgba(cr, 1, 1, 1, a)
         cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row

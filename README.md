@@ -5,7 +5,7 @@ A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Co
 - Album art, title and artist, with long titles wrapped to a fixed widget width
 - Spotify-style controls: previous / play-pause / next, and a seek bar you can click or drag
 - Like button (♥) showing whether the track is in your Liked Songs, click to toggle
-- Smoothly scrolling lyrics from [LRCLIB](https://lrclib.net): previous, current and next line
+- Smoothly scrolling synced lyrics from [LRCLIB](https://lrclib.net): previous, current and next line
 - Background colour taken from the album art, fading between tracks
 - Drag the widget anywhere, on any monitor; its position is remembered
 
@@ -49,4 +49,4 @@ No client secret is needed (PKCE). The refresh token is stored in
 
 - Tested on Ubuntu 26.04, GNOME/Wayland, with 2x display scaling across three monitors.
 - The widget is an unmanaged ("override") window: it stays on top on every workspace.
-- Lyrics coverage depends on LRCLIB; unsynced lyrics are spread over the song and shown dimmed.
+- Lyrics coverage depends on LRCLIB; only synced lyrics are shown.

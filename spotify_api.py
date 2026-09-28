@@ -17,6 +17,7 @@ TOKEN_FILE = os.path.join(CONF_DIR, 'spotify-token.json')
 LIKED_FILE = os.path.expanduser('~/.cache/conky-nowplaying/liked')
 TOGGLED_FILE = LIKED_FILE + '-toggled'   # mtime = last click; pollers back off after it
 LOCK_FILE = LIKED_FILE + '.lock'
+LIBRARY_FILE = os.path.expanduser('~/.cache/conky-nowplaying/library.json')
 REDIRECT_URI = 'http://127.0.0.1:8888/callback'
 SCOPES = 'user-library-read user-library-modify'
 
@@ -117,7 +118,83 @@ def current_track_uri():
 
 
 def is_liked(uri):
+    """Whether this exact track is saved (see is_liked_any for what the heart shows)."""
     return bool(api('GET', '/me/library/contains', uris=uri)[0])
+
+
+# Spotify's app shows a song as liked when *any* release of it is saved (single vs album
+# version, deluxe editions, ...), but the Web API only checks the exact track ID. To match
+# the app we keep an index of Liked Songs keyed by (title, first artist).
+
+_track_keys = {}
+
+
+def _key(name, artist):
+    return f'{name.strip().lower()}\t{artist.strip().lower()}'
+
+
+def track_key(uri):
+    if uri not in _track_keys:
+        t = api('GET', '/tracks/' + uri.rsplit(':', 1)[1])
+        _track_keys[uri] = _key(t['name'], t['artists'][0]['name'])
+    return _track_keys[uri]
+
+
+def _load_library():
+    try:
+        return json.load(open(LIBRARY_FILE))
+    except (OSError, ValueError):
+        return None
+
+
+def _save_library(lib):
+    os.makedirs(os.path.dirname(LIBRARY_FILE), exist_ok=True)
+    with open(LIBRARY_FILE + '.tmp', 'w') as f:
+        json.dump(lib, f)
+    os.replace(LIBRARY_FILE + '.tmp', LIBRARY_FILE)
+
+
+def _index_page(lib, items):
+    """Adds saved tracks to the index; returns how many were new."""
+    new = 0
+    for item in items:
+        t = item.get('track')
+        if not t or not t.get('uri'):
+            continue
+        uris = lib['keys'].setdefault(_key(t['name'], t['artists'][0]['name']), [])
+        if t['uri'] not in uris:
+            uris.append(t['uri'])
+            new += 1
+    return new
+
+
+def refresh_library(max_age=6 * 3600):
+    """Full rescan when the index is missing, stale, or the library shrank (unlikes made
+    elsewhere); otherwise just pick up the newest likes from the first page."""
+    lib = _load_library()
+    first = api('GET', '/me/tracks', limit=50)
+    if lib and time.time() - lib['scanned'] < max_age and first['total'] >= lib['total']:
+        _index_page(lib, first['items'])
+        lib['total'] = first['total']
+        _save_library(lib)
+        return lib
+    lib = {'scanned': time.time(), 'total': first['total'], 'keys': {}}
+    page = first
+    while True:
+        _index_page(lib, page['items'])
+        if not page.get('next'):
+            break
+        page = api('GET', '/me/tracks', limit=50, offset=page['offset'] + page['limit'])
+    _save_library(lib)
+    return lib
+
+
+def is_liked_any(uri):
+    """What the heart shows: this track, or any same-titled release by the same artist."""
+    if is_liked(uri):
+        return True
+    lib = _load_library()
+    return bool(lib and lib['keys'].get(track_key(uri)))
 
 
 def write_liked(value):
@@ -141,11 +218,22 @@ def toggle():
     with open(LOCK_FILE, 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         shown = open(LIKED_FILE).read().strip() if os.path.exists(LIKED_FILE) else ''
-        liked = (shown == '1') if shown in ('0', '1') else is_liked(uri)
+        liked = (shown == '1') if shown in ('0', '1') else is_liked_any(uri)
         write_liked(not liked)
         open(TOGGLED_FILE, 'w').close()
         want = open(LIKED_FILE).read().strip() == '1'
-        api('PUT' if want else 'DELETE', '/me/library', uris=uri)
+        lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}
+        key = track_key(uri)
+        if want:
+            api('PUT', '/me/library', uris=uri)
+            lib['keys'].setdefault(key, [])
+            if uri not in lib['keys'][key]:
+                lib['keys'][key].append(uri)
+        else:
+            # unliking removes every saved release of the song, or the heart would stay on
+            uris = sorted(set(lib['keys'].pop(key, [])) | {uri})
+            api('DELETE', '/me/library', uris=','.join(uris))
+        _save_library(lib)
 
 
 def recently_toggled(seconds=15):
@@ -163,6 +251,6 @@ if __name__ == '__main__':
         toggle()
     elif cmd == 'status':
         uri = current_track_uri()
-        print(uri, is_liked(uri) if uri else None)
+        print(uri, 'exact:', is_liked(uri) if uri else None, 'any release:', is_liked_any(uri) if uri else None)
     else:
         sys.exit(__doc__)
