@@ -29,10 +29,13 @@ Every command must exit 0 and print nothing, apart from the test summary
 - `luac5.3 -p` only parses; it catches syntax errors, not a bad call or a
   misspelt name. `src/conky.conf` is Lua too (conky reads its config with its
   embedded interpreter), and conky links Lua 5.3, so `luac5.3` reads both
-  files with the grammar conky uses. It comes from the `lua5.3` package,
-  installed with apt in the user's terminal (`sudo apt install lua5.3`). While
-  it is missing, the check has not run: say so in the test plan, and let the
-  run below read the Lua errors out of the log instead.
+  files with the grammar conky uses. After a conky upgrade,
+  `ldd "$(command -v conky)" | grep liblua` shows the version it links; when
+  that changes, the checker here changes with it. `luac5.3` comes from the
+  `lua5.3` package, installed with apt in the user's terminal
+  (`sudo apt install lua5.3`). While it is missing, the check has not run: say
+  so in the test plan, and let the run below read the Lua errors out of the
+  log instead.
 
 ## A build, when packaging could break
 
@@ -42,11 +45,14 @@ a file `debian/install` names that is not there:
 
 ```bash
 ./build-deb.sh
-dpkg-deb --contents dist/conky-spotify-nowplaying_*_all.deb
+dpkg-deb --contents "dist/conky-spotify-nowplaying_$(dpkg-parsechangelog -S Version)_all.deb"
 ```
 
-`build-deb.sh` needs `debhelper` and `devscripts`, and cleans up after itself
-with `dh_clean`; `dist/` is ignored by git.
+`dist/` is ignored by git and keeps every version built in it, so the listing
+names the version rather than globbing. `build-deb.sh` needs `debhelper` and
+`devscripts`, and cleans up after itself with `dh_clean`. It writes through the
+parent directory, which sibling worktrees share, so it holds a lock on that
+directory, and a second session's build waits for the first.
 
 ## Then a run
 

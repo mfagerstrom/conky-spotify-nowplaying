@@ -13,7 +13,8 @@ found clean.
 
 The self review starts once the pull request is open, the static checks in
 [static-checks.md](static-checks.md) pass on the branch head, and the pull
-request is mergeable, per [ready-signal.md](ready-signal.md). The review ends in the signal.
+request is mergeable, per [ready-signal.md](ready-signal.md). The review ends
+in the signal.
 
 Move the session to the `Self Review` sidebar group as the review starts, per
 [sidebar-groups.md](sidebar-groups.md).

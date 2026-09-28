@@ -131,8 +131,8 @@ Run the static checks in [static-checks.md](../_shared/static-checks.md) on
 the branch, with the build it asks for. Fix everything they report.
 
 A change that touches `src/`, `bin/`, `packaging/` or `debian/` is then run,
-per [the same file](../_shared/static-checks.md#then-a-run), from the checkout, whose launcher uses the `src/` next
-to it.
+per [the same file](../_shared/static-checks.md#then-a-run), from the
+checkout, whose launcher uses the `src/` next to it.
 
 Only one widget runs per desktop, and every copy shares one pid file, so
 `stop` stops whichever copy is running. Look first: a widget running from
