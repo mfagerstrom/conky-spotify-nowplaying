@@ -35,6 +35,7 @@ COLUMN_X = 154                                # text column, right of the 118 px
 ART_LEFT, ART_BOTTOM = 22, 140               # artwork edges, measured from a capture
 LABEL_LIFT = 7                                # lifts NOW PLAYING to the artwork's top edge
 LYRIC_GAP = 10                                # space between controls/artwork and lyrics
+LYRIC_SPACING = 3                             # extra space between lyric rows
 BOTTOM_TRIM = 10                              # px taken off border_inner_margin at the bottom
                                               # (conky.conf's minimum_height is reduced to match)
 SPACER_FONT = 'Ubuntu Sans 1'
@@ -360,7 +361,7 @@ def render():
     if lyr_version:
         # Full width under the artwork and controls: reserve LYRIC_ROWS rows there, and
         # draw.lua draws and scrolls the lyrics inside them.
-        lyric_row = line_height(LYRIC_FONT)
+        lyric_row = line_height(LYRIC_FONT) + LYRIC_SPACING
         top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
         gap = round(top - y)
         # One tiny spacer line, pushed down so the text ends where the lyric rows end
