@@ -175,6 +175,10 @@ def seek(d, root, win, regions, s):
 
 
 def main():
+    try:
+        os.remove(SEEK_PREVIEW)  # left behind if a previous run was killed mid-seek
+    except OSError:
+        pass
     d = ctypes.c_void_p(x11.XOpenDisplay(None))
     root = x11.XDefaultRootWindow(d)
     win, last_check = None, 0.0

@@ -183,32 +183,54 @@ local function ellipsize(cr, text, width)
     return '…'
 end
 
+local function show_text_with_notes(cr, text, bold)
+    -- Cairo's simple text API has no font fallback and Ubuntu Sans has no music notes,
+    -- so draw ♪/♫/♬ runs in DejaVu Sans and everything else in Ubuntu Sans.
+    local weight = bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL
+    local pos = 1
+    while pos <= #text do
+        local a, b = text:find('[\226][\153][\170\171\172]', pos)   -- U+266A..U+266C
+        local plain = text:sub(pos, (a or #text + 1) - 1)
+        if #plain > 0 then
+            cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, weight)
+            cairo_show_text(cr, plain)
+        end
+        if not a then break end
+        cairo_select_font_face(cr, 'DejaVu Sans', CAIRO_FONT_SLANT_NORMAL, weight)
+        cairo_show_text(cr, text:sub(a, b))
+        pos = b + 1
+    end
+end
+
 local function draw_lyrics(cr, l, s, pos)
     local x0, x1, top, row = l[1] * s, l[2] * s, l[3] * s, l[4] * s
     local lines = lyrics.lines
     if #lines == 0 then return end
 
-    -- index of the current line, then ease the scroll towards it (~0.3 s glide)
+    -- index of the current line, then ease the scroll towards it
     local idx = 1
     for i, entry in ipairs(lines) do
         if entry[1] <= pos then idx = i else break end
     end
     if scroll == nil or math.abs(scroll - idx) > 3 then scroll = idx end   -- seeks jump
-    scroll = scroll + (idx - scroll) * (1 - math.exp(-dt() * 12))
+    scroll = scroll + (idx - scroll) * (1 - math.exp(-dt() * 12 / 1.1))   -- ~0.33 s glide
 
     cairo_save(cr)
     cairo_rectangle(cr, x0, top, x1 - x0, row * 3)
     cairo_clip(cr)
-    cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
     cairo_set_font_size(cr, 11 * 96 / 72 * s)
     local centre = top + row * 1.5
     for i = math.max(1, idx - 2), math.min(#lines, idx + 2) do
         local y = centre + (i - scroll) * row
-        local dist = math.min(math.abs(i - scroll), 1.5)
-        local a = lyrics.synced and (1 - dist * 0.45) or 0.55             -- unsynced: all dimmed
-        cairo_set_source_rgba(cr, 1, 1, 1, math.max(a, 0.2))
+        local dist = math.abs(i - scroll)
+        local a = lyrics.synced and (1 - math.min(dist, 1) * 0.45) or 0.55  -- unsynced: all dimmed
+        if dist > 1 then a = a * math.max(0, (1.5 - dist) / 0.5) end      -- fade out past the edge rows
+        local bold = lyrics.synced and i == idx
+        cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL,
+                               bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL)
+        cairo_set_source_rgba(cr, 1, 1, 1, a)
         cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row
-        cairo_show_text(cr, ellipsize(cr, lines[i][2], x1 - x0))
+        show_text_with_notes(cr, ellipsize(cr, lines[i][2], x1 - x0), bold)
     end
     cairo_restore(cr)
 end

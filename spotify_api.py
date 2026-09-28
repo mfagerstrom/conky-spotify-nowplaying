@@ -8,13 +8,15 @@
 The refresh token is kept in ~/.config/conky/spotify-token.json (mode 600).
 The like state for the widget is written to ~/.cache/conky-nowplaying/liked ("1"/"0").
 """
-import base64, hashlib, http.server, json, os, secrets, subprocess, sys, time
+import base64, fcntl, hashlib, http.server, json, os, secrets, subprocess, sys, time
 import urllib.error, urllib.parse, urllib.request
 
 CONF_DIR = os.path.expanduser('~/.config/conky')
 CLIENT_ID_FILE = os.path.join(CONF_DIR, 'spotify-client-id')
 TOKEN_FILE = os.path.join(CONF_DIR, 'spotify-token.json')
 LIKED_FILE = os.path.expanduser('~/.cache/conky-nowplaying/liked')
+TOGGLED_FILE = LIKED_FILE + '-toggled'   # mtime = last click; pollers back off after it
+LOCK_FILE = LIKED_FILE + '.lock'
 REDIRECT_URI = 'http://127.0.0.1:8888/callback'
 SCOPES = 'user-library-read user-library-modify'
 
@@ -126,16 +128,31 @@ def write_liked(value):
 
 
 def toggle():
+    """Flip the heart immediately, then make Spotify match it.
+
+    The new state is taken from what the widget shows (the liked file), not from a
+    network round trip, so the heart reacts instantly. Toggles are serialized with a
+    lock and each one pushes the *current* displayed state, so fast repeated clicks
+    always leave Spotify matching the heart."""
     uri = current_track_uri()
     if not uri:
         return
-    liked = is_liked(uri)
-    write_liked(not liked)  # show the new state right away
+    os.makedirs(os.path.dirname(LIKED_FILE), exist_ok=True)
+    with open(LOCK_FILE, 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        shown = open(LIKED_FILE).read().strip() if os.path.exists(LIKED_FILE) else ''
+        liked = (shown == '1') if shown in ('0', '1') else is_liked(uri)
+        write_liked(not liked)
+        open(TOGGLED_FILE, 'w').close()
+        want = open(LIKED_FILE).read().strip() == '1'
+        api('PUT' if want else 'DELETE', '/me/library', uris=uri)
+
+
+def recently_toggled(seconds=15):
     try:
-        api('DELETE' if liked else 'PUT', '/me/library', uris=uri)
-    except Exception:
-        write_liked(liked)
-        raise
+        return time.time() - os.path.getmtime(TOGGLED_FILE) < seconds
+    except OSError:
+        return False
 
 
 if __name__ == '__main__':

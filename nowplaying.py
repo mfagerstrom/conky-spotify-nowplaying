@@ -32,6 +32,9 @@ LYRICS = os.path.join(CACHE, 'lyrics.txt')       # timed lyric lines for draw.lu
 TEXT_WIDTH = 505
 MARGIN = 20                                   # border_inner_margin
 COLUMN_X = 154                                # text column, right of the 118 px album art
+ART_LEFT, ART_BOTTOM = 22, 140               # artwork edges, measured from a capture
+LABEL_LIFT = 7                                # lifts NOW PLAYING to the artwork's top edge
+LYRIC_GAP = 10                                # space between controls/artwork and lyrics
 COLUMN_WIDTH = TEXT_WIDTH - COLUMN_X - 4
 TITLE_FONT, ARTIST_FONT, LYRIC_FONT = 'Ubuntu Sans Bold 17', 'Ubuntu Sans 13', 'Ubuntu Sans 11'
 LABEL_FONT, HEART_FONT = 'Ubuntu Sans Bold 10', 'DejaVu Sans 15'
@@ -136,6 +139,9 @@ def fetch_cover(url):
 
 
 def fetch_liked(track_id):
+    # Right after a click Spotify can still report the old state; trust the click.
+    if spotify_api.recently_toggled():
+        return
     try:
         uri = spotify_api.current_track_uri()
         liked = spotify_api.is_liked(uri) if uri else None
@@ -293,8 +299,10 @@ def render():
     heart = '${color1}♥' if liked else ('${color}♡' if liked is False else '${color3}♡')
 
     g = f'${{goto {COLUMN_X}}}'
-    y = MARGIN  # running top of the current line, to place what draw.lua draws
-    out = [f"${{image {COVER} -p 0,0 -s 118x118 -n}}"
+    # Running top of the current line, to place what draw.lua draws. The first line is
+    # lifted so the label's cap height lines up with the top of the artwork (measured).
+    y = MARGIN - LABEL_LIFT
+    out = [f"${{image {COVER} -p 0,0 -s 118x118 -n}}${{voffset -{LABEL_LIFT}}}"
            f"{g}${{color1}}${{font {conky_font(LABEL_FONT)}}}NOW PLAYING${{font}}"
            f"${{alignr}}${{font {conky_font(HEART_FONT)}}}{heart}${{font}}"]
     y += line_height(LABEL_FONT, HEART_FONT)
@@ -311,20 +319,24 @@ def render():
     play_cx = prev_cx + SKIP_SIZE / 2 + CONTROL_GAP + PLAY_SIZE / 2
     next_cx = play_cx + PLAY_SIZE / 2 + CONTROL_GAP + SKIP_SIZE / 2
     time_x = round(next_cx + SKIP_SIZE / 2 + CONTROL_GAP + 4)
-    out.append(f"{g}${{font {conky_font(CONTROL_ROW_FONT)}}} ${{font}}"   # reserves the row height
+    # Centre the bar and buttons on the timestamps' digits. Conky draws the row's baseline
+    # at the bottom of the row (measured from a capture); the digits' ink ends there.
+    ink = ink_extents(total, TIME_FONT)
+    ink_bottom = ink.y + ink.height - font_ascent(TIME_FONT)   # relative to the baseline, ~0
+    mid_offset = row + ink_bottom - ink.height / 2 + 0.75     # + stroke rounding, measured
+    # Push the row down so the play button's bottom meets the artwork's bottom, when the
+    # title/artist leave room for that.
+    push = max(0, round(ART_BOTTOM - PLAY_SIZE / 2 - (y + mid_offset)))
+    y += push
+    mid_y = y + mid_offset
+    out.append(f"${{voffset {push}}}{g}${{font {conky_font(CONTROL_ROW_FONT)}}} ${{font}}"   # reserves the row height
                f"${{goto {time_x}}}${{color}}${{font {conky_font(TIME_FONT)}}}{elapsed}"
                f"${{alignr}}{total}${{font}}")
     time_w = text_width(total, TIME_FONT)      # elapsed never has more digits than total
     bar_x0 = time_x + time_w + 10
     bar_x1 = MARGIN + TEXT_WIDTH - time_w - 10
-    # Centre the bar and buttons on the timestamps' digits. Conky draws the row's baseline
-    # at the bottom of the row (measured from a capture); the digits' ink ends there.
-    baseline = y + row
-    ink = ink_extents(total, TIME_FONT)
-    ink_bottom = ink.y + ink.height - font_ascent(TIME_FONT)   # relative to the baseline, ~0
-    mid_y = baseline + ink_bottom - ink.height / 2 + 0.75     # + stroke rounding, measured
     fraction = min(max(position / duration, 0), 1) if duration else 0
-    y += row + 10
+    y += row
 
     draw = [f'scale {SCALE}',
             f'bar {bar_x0} {bar_x1} {mid_y} {fraction:.4f} {duration:.3f}',
@@ -332,11 +344,14 @@ def render():
             f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}']
     lyr_version = write_lyrics(track_id, duration)
     if lyr_version:
-        # reserve LYRIC_ROWS rows; draw.lua draws and scrolls the lyrics inside them
+        # Full width under the artwork and controls: reserve LYRIC_ROWS rows there, and
+        # draw.lua draws and scrolls the lyrics inside them.
         lyric_row = line_height(LYRIC_FONT)
-        for _ in range(LYRIC_ROWS):
-            out.append(f"${{font {conky_font(LYRIC_FONT)}}} ${{font}}")
-        draw.append(f'lyrics {COLUMN_X} {MARGIN + TEXT_WIDTH} {y} {lyric_row} {lyr_version}')
+        top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
+        gap = round(top - y)
+        for i in range(LYRIC_ROWS):
+            out.append(f"{f'${{voffset {gap}}}' if i == 0 else ''}${{font {conky_font(LYRIC_FONT)}}} ${{font}}")
+        draw.append(f'lyrics {ART_LEFT} {MARGIN + TEXT_WIDTH} {y + gap} {lyric_row} {lyr_version}')
     write_atomic(DRAW, '\n'.join(draw) + '\n')
 
     half = PLAY_SIZE / 2 + 4
@@ -351,7 +366,7 @@ def render():
         'bar': [bar_x0, bar_x1],
         'duration': duration,
     })
-    return '\n'.join(out) + '\n'
+    return '\n'.join(out)   # no trailing newline: it would add an empty line at the bottom
 
 
 def write_lyrics(track_id, duration):
