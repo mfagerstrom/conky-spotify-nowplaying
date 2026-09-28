@@ -9,6 +9,10 @@ Every branch starts from current `origin/main`, never from whatever happens to
 be checked out. Branching off the previous task's branch silently drags its
 commits into the next pull request.
 
+Cutting the branch starts the task, so move the session to the `Working`
+sidebar group, per
+[sidebar-groups.md](../_shared/sidebar-groups.md).
+
 ## 1. Protect existing work
 
 Run `git status` first.

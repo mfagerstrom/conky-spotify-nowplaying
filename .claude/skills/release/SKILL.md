@@ -21,6 +21,12 @@ Steps 5-7 publish to places other people see. Confirm the version and the
 changelog text with the user before step 5, and don't continue past a failed
 step.
 
+The session files itself in the sidebar as the release moves along, per
+[sidebar-groups.md](../_shared/sidebar-groups.md): `Working` from the start,
+`Needs Review` while it waits on the version confirmation in step 2,
+`Tests Running` while Launchpad builds in step 7, and `Completed` at the
+report.
+
 ## 0. Preconditions
 
 - `git status` is clean and `main` is up to date with `origin/main`
@@ -151,6 +157,8 @@ curl -s "$B?ws.op=getPublishedSources" | python3 -c "import json,sys; [print(e['
 curl -s "$B?ws.op=getBuildRecords"     | python3 -c "import json,sys; [print(e['title'], '|', e['buildstate'], '|', e['build_log_url']) for e in json.load(sys.stdin)['entries']]"
 ```
 
+Move the session to `Tests Running` once the upload succeeds, and back to
+`Working` once the build settles, before reading its result.
 Check a few times spaced minutes apart, or when the user asks - no tight
 polling loops. Launchpad's emails go to the no-reply maintainer address, so
 nobody is notified; this is the only way to know.
