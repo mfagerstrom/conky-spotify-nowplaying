@@ -68,18 +68,16 @@ entry to the user and get the version confirmed.
 
 ## 3. Static checks
 
-All must pass before building:
+All must pass before building: the list in
+[ready-signal.md](../_shared/ready-signal.md#the-static-checks-come-first),
+then
 
 ```bash
-python3 -m py_compile src/*.py bin/conky-spotify-nowplaying scripts/*.py
-python3 scripts/catchup_test.py
-sh -n build-deb.sh release-ppa.sh
-desktop-file-validate packaging/conky-spotify-nowplaying.desktop
 dpkg-parsechangelog -S Version        # prints the new X.Y.Z
 ```
 
-`desktop-file-validate` hints count as failures to fix. There is no Lua
-checker installed; `draw.lua` and `conky.conf` errors show up in the smoke test.
+There is no Lua checker installed; `draw.lua` and `conky.conf` errors show up
+in the smoke test.
 
 ## 4. Build and smoke-test the installed package
 

@@ -1,7 +1,8 @@
 # Sidebar groups
 
-Shared by every skill, by [run-watch.md](run-watch.md), and by any task a
-session works outside one. The
+Shared by every skill, by [run-watch.md](run-watch.md),
+[self-review.md](self-review.md) and [ready-signal.md](ready-signal.md), and by
+any task a session works outside one. The
 desktop app's own session states cannot be extended, so the Code tab sidebar
 carries custom groups that say where each session stands. This file is the
 only place the groups and their moves are written out.
@@ -15,11 +16,9 @@ repositories share one set of groups instead of making near-duplicates.
 | `Blocked`       | its task waits on another session, and it has nothing else to do   |
 | `Working`       | it holds a task and is editing, reading, or deciding               |
 | `Tests Running` | it is waiting on an external build it started (a Launchpad build)  |
-| `Needs Review`  | it has a pull request waiting on the user, or asked the user a question |
+| `Self Review`   | it is reviewing and fixing its own pull request before handoff     |
+| `Needs Review`  | it has sent the ready signal, or asked the user a question         |
 | `Completed`     | its last pull request merged and it holds no other work            |
-
-PlaywrightTesting also has a `Self Review` group. This repository has no self
-review step, so its sessions never use it.
 
 ## The moves
 
@@ -36,14 +35,23 @@ other session asks the user first, so it is never done unasked.
   the first thing the session does with that output, before it reads the
   result, because triage of a failed build can run long and the group is
   wrong for all of it.
-- Pull request opened and handed to the user, or the turn ends on a question
-  only the user can answer (a `/release` version confirmation, say):
-  `Needs Review`. This holds for every pull request the session opens,
-  including one opened on the side of a longer task. The session records the
-  pull request with `scripts/catchup.py add-pr` and leaves the one `wait`
-  running, per [run-watch.md](run-watch.md#waiting-on-a-merge), so the merge
-  reaches it without the user reporting it.
-- The user answers, or review comments come in to act on: `Working`.
+- Pull request open, its static checks passing and mergeable: `Self Review`,
+  while the session reviews it and fixes what the review finds, per
+  [self-review.md](self-review.md). A session whose static checks fail or
+  whose pull request conflicts stays in `Working` until that is fixed.
+- Self review ended and ready signal sent, or the turn ends on a question only
+  the user can answer (a `/release` version confirmation, say):
+  `Needs Review`. The ready signal waits on the self review ending, per
+  [ready-signal.md](ready-signal.md). This holds for every pull request the
+  session opens, including one opened on the side of a longer task. The
+  session records the pull request with `scripts/catchup.py add-pr` and leaves
+  the one `wait` running, per [run-watch.md](run-watch.md#waiting-on-a-merge),
+  so the merge reaches it without the user reporting it.
+- The user answers a question the self review put: back to `Self Review`.
+- The user answers anything else, or review comments come in to act on:
+  `Working`. The commits that answer them go back through the self review
+  loop in `Self Review` before the signal goes out again, per
+  [self-review.md](self-review.md#commits-after-the-handoff).
 - `pr: <number> merged` or `closed without merging`: pick the group by what
   the session still holds. Any of these means `Working`:
 
@@ -53,7 +61,8 @@ other session asks the user first, so it is never done unasked.
   - anything the user asked for in this session that is not finished yet.
 
   A session whose other pull request is waiting on the user goes to
-  `Needs Review`. Only when nothing is left does it go to `Completed`.
+  `Needs Review`, and one whose other pull request is still in self review
+  goes to `Self Review`. Only when nothing is left does it go to `Completed`.
   `wait` prints a `sidebar:` line with every closed pull request as the
   reminder, and the move comes before anything else the session does with
   that output.
@@ -100,6 +109,7 @@ A session with anything of its own still open files by that instead, and
 `Blocked` waits until it is the last thing left:
 
 - a Launchpad build still open: `Tests Running`
+- a pull request of its own still in self review: `Self Review`
 - a pull request waiting on the user, or a question to the user: `Needs Review`
 - work it can still do while it waits: `Working`
 

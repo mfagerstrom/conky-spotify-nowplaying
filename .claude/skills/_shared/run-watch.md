@@ -1,9 +1,10 @@
 # Waiting on something
 
 Shared by `/release`, by any pull request a session opens, and by
-[sidebar-groups.md](sidebar-groups.md). This file is the only place the
-catch-up script, the one-watcher rule and the three minute floor are written
-out. A skill that needs any of them points here rather than restating them.
+[sidebar-groups.md](sidebar-groups.md) and [ready-signal.md](ready-signal.md).
+This file is the only place the catch-up script, the one-watcher rule and the
+three minute floor are written out. A skill that needs any of them points
+here rather than restating them.
 
 Ported from PlaywrightTesting's `run-watch.md`, less the GitHub Actions run
 tallies: this repository has no workflows. What a session waits on here is a
@@ -106,9 +107,9 @@ While it is open, the row's state says where it is (`not in the archive yet`,
 
 ## Waiting on a merge
 
-A session that hands a pull request to the user, per
-[sidebar-groups.md](sidebar-groups.md), records it and lets the watcher wait
-for the merge:
+A session that has sent the ready signal, per
+[ready-signal.md](ready-signal.md), records the pull request and lets the
+watcher wait for the merge:
 
 ```bash
 scripts/catchup.py add-pr <ledger> <pr-number> "<short label>"
