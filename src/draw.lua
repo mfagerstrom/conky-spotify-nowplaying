@@ -163,24 +163,28 @@ local function draw_window_buttons(cr, w, s)
 end
 
 local function draw_heart(cr, h, s)
-    -- ♥ in Spotify green when liked; otherwise (not liked, or not known) the ♡ outline,
-    -- shaded like minimize/close: white, full on hover
-    local cx, cy, px = h[1] * s, h[2] * s, h[3] * s
+    -- Two round lobes with lines tangent to them meeting at the point, stroked like
+    -- minimize/close (white, full on hover); filled Spotify green when liked.
+    local cx, cy, w = h[1] * s, h[2] * s, h[3] * s
     local on = hovered(h[5] * s, h[6] * s, h[7] * s, h[8] * s)
-    local liked = h[4] == 1
-    local glyph = liked and '♥' or '♡'
-    if liked then
+    local r = w / 4                                 -- lobe radius; the lobes meet at cx
+    local ty = cy - r * math.sqrt(0.5)              -- lobe centres' y, centring the shape on cy
+    local d = r * math.sqrt(0.5)                    -- tangent points at 45 degrees below the lobes
+    cairo_new_path(cr)
+    cairo_move_to(cr, cx, ty + r * (1 + math.sqrt(2)))
+    cairo_line_to(cr, cx - r - d, ty + d)
+    cairo_arc(cr, cx - r, ty, r, 3 * math.pi / 4, 2 * math.pi)
+    cairo_arc(cr, cx + r, ty, r, math.pi, math.pi / 4)
+    cairo_close_path(cr)
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND)
+    cairo_set_line_width(cr, 2 * s)
+    if h[4] == 1 then
         cairo_set_source_rgba(cr, 0.114, 0.725, 0.329, 1)          -- conky.conf color1
+        cairo_fill_preserve(cr)
     else
         cairo_set_source_rgba(cr, 1, 1, 1, on and 1 or 0.7)
     end
-    cairo_select_font_face(cr, 'DejaVu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
-    cairo_set_font_size(cr, px)
-    local ext = cairo_text_extents_t:create()
-    cairo_text_extents(cr, glyph, ext)
-    cairo_move_to(cr, cx - ext.x_bearing - ext.width / 2, cy - ext.y_bearing - ext.height / 2)
-    cairo_show_text(cr, glyph)
-    ext:destroy()
+    cairo_stroke(cr)
 end
 
 local function draw_bar(cr, b, s, pos)
@@ -276,11 +280,6 @@ function conky_draw_bar()
     local d = load_draw()
     if not d.scale then return end
     local s = d.scale[1]
-    with_cairo(function(cr)
-        if d.window then draw_window_buttons(cr, d.window, s) end
-        if d.heart then draw_heart(cr, d.heart, s) end
-    end)
-    if not d.bar then return end
 
     -- playback clock: resync on each draw.txt update, advance locally in between
     local c = d.clock
@@ -291,6 +290,9 @@ function conky_draw_bar()
     end
 
     with_cairo(function(cr)
+        if d.window then draw_window_buttons(cr, d.window, s) end
+        if d.heart then draw_heart(cr, d.heart, s) end
+        if not d.bar then return end                -- Spotify not playing: top buttons only
         if d.controls then draw_controls(cr, d.controls, s) end
         draw_bar(cr, d.bar, s, clock.pos)
         if d.lyrics then

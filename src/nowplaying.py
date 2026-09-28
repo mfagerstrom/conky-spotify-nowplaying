@@ -13,7 +13,7 @@ which conky.conf renders with ${execpi}. It covers:
   - synced lyrics from LRCLIB (lrclib.net) -> lyrics.txt; draw.lua scrolls them smoothly
     (previous / current / next line). Tracks with only unsynced lyrics show none.
 """
-import json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
+import functools, json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
 import gi
 gi.require_version('Pango', '1.0'); gi.require_version('PangoCairo', '1.0'); gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Pango, PangoCairo
@@ -53,7 +53,7 @@ SKIP_SIZE, PLAY_SIZE, CONTROL_GAP = 14, 24, 12
 WINDOW_BUTTON_SIZE = 10                       # minimize / close icons, right of the heart
 WINDOW_BUTTON_PITCH = 22                      # centre to centre, and each one's hit width
 HEART_PITCH = 25                              # heart centre to minimize centre
-HEART_PX = 20                                 # HEART_FONT (15 pt) in px, for draw.lua's cairo text
+HEART_WIDTH = 16                              # the heart draw.lua strokes, about the old ♡ glyph's size
 LYRIC_ROWS = 3
 LIKE_POLL_SECONDS = 30
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
@@ -310,6 +310,7 @@ def write_regions(regions):
     write_atomic(REGIONS, json.dumps(regions))
 
 
+@functools.cache                                  # fonts and constants only
 def top_buttons():
     """The heart, minimize and close on the top row: their centres (x), the shared centre
     line (y), and the click regions for minimize and close."""
@@ -431,7 +432,7 @@ def render():
             f'controls {prev_cx} {play_cx} {next_cx} {mid_y} {SKIP_SIZE} {PLAY_SIZE} {int(status == "Playing")}',
             f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}',
             window_line,
-            f'heart {heart_cx} {top_cy} {HEART_PX} {heart_state} ' + ' '.join(map(str, heart_box))]
+            f'heart {heart_cx} {top_cy} {HEART_WIDTH} {heart_state} ' + ' '.join(map(str, heart_box))]
     lyr_version = write_lyrics(track_id, duration)
     if lyr_version:
         # Full width under the artwork and controls: reserve LYRIC_ROWS rows there, and

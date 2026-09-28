@@ -57,7 +57,8 @@ def main():
         return 'Show widget' if os.path.exists(HIDDEN) else 'Hide widget'
 
     visibility = Gtk.MenuItem(label=visibility_label())
-    visibility.connect('activate', lambda _: launcher('show' if os.path.exists(HIDDEN) else 'hide'))
+    # Do what the label says: it can be up to one refresh behind the flag file.
+    visibility.connect('activate', lambda item: launcher('show' if item.get_label() == 'Show widget' else 'hide'))
     menu.append(visibility)
 
     quit_item = Gtk.MenuItem(label='Quit')

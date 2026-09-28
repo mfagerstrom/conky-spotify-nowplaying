@@ -191,7 +191,7 @@ def main():
         pass
     d = ctypes.c_void_p(x11.XOpenDisplay(None))
     root = x11.XDefaultRootWindow(d)
-    win, last_check, hidden = None, 0.0, False
+    win, last_check, hidden = None, 0.0, None   # None: not known, e.g. after a restart
     ev = XEvent()
     while True:
         now = time.monotonic()
@@ -215,9 +215,10 @@ def main():
                 hide = os.path.exists(HIDDEN)
                 if hide:
                     x11.XUnmapWindow(d, win)
-                elif hidden:
+                elif hidden is not False:              # a no-op when already mapped
                     x11.XMapWindow(d, win)
-                    log('shown')
+                    if hidden:
+                        log('shown')
                 hidden = hide
                 x11.XFlush(d)
         while x11.XPending(d):

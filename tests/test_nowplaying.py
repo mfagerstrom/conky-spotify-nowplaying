@@ -148,6 +148,9 @@ class WindowButtonsTest(support.TempDirTest):
         super().setUp()
         self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt')
         self.redirect(nowplaying.spotify_api, LIKED_FILE='liked')
+        patcher = mock.patch.object(nowplaying, 'state', nowplaying.State())
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def render(self, status):
         answers = {'status': status,
