@@ -35,6 +35,7 @@ COLUMN_X = 154                                # text column, right of the 118 px
 ART_LEFT, ART_BOTTOM = 22, 140               # artwork edges, measured from a capture
 LABEL_LIFT = 7                                # lifts NOW PLAYING to the artwork's top edge
 LYRIC_GAP = 10                                # space between controls/artwork and lyrics
+BOTTOM_TRIM = 10                              # px taken off border_inner_margin at the bottom
 COLUMN_WIDTH = TEXT_WIDTH - COLUMN_X - 4
 TITLE_FONT, ARTIST_FONT, LYRIC_FONT = 'Ubuntu Sans Bold 17', 'Ubuntu Sans 13', 'Ubuntu Sans 11'
 LABEL_FONT, HEART_FONT = 'Ubuntu Sans Bold 10', 'DejaVu Sans 15'
@@ -374,6 +375,7 @@ def render():
         'bar': [bar_x0, bar_x1],
         'duration': duration,
     })
+    out[-1] += f'${{voffset -{BOTTOM_TRIM}}}'   # halves conky's 20 px bottom padding
     return '\n'.join(out)   # no trailing newline: it would add an empty line at the bottom
 
 
