@@ -3,8 +3,9 @@
 
 usage: conky-spotify-nowplaying [command]
 
-  (no command)     start the widget, or stop it if it is already running
+  (no command)     start the widget, show it if it is minimized, or stop it
   start | stop | restart | status
+  show | hide      bring back a minimized widget, or minimize it
   login            log in to Spotify for the like button
   autostart on     start the widget when you log in
   autostart off    don't
@@ -23,6 +24,7 @@ APP_DIR = os.path.realpath(APP_DIR)
 CONF = os.path.expanduser(f'~/.config/{NAME}')
 CACHE = os.path.expanduser(f'~/.cache/{NAME}')
 PIDFILE = os.path.join(CACHE, 'run.pid')
+HIDDEN = os.path.join(CACHE, 'hidden')          # minimized; conky-mouse.py unmaps the window
 AUTOSTART = os.path.expanduser(f'~/.config/autostart/{NAME}.desktop')
 OLD_CONF = os.path.expanduser('~/.config/conky')   # pre-package installs kept state here
 STATE_FILES = ('position', 'spotify-client-id', 'spotify-token.json')
@@ -54,7 +56,19 @@ def migrate():
             shutil.copy2(old, new)
 
 
+def set_hidden(hidden):
+    if hidden:
+        os.makedirs(CACHE, exist_ok=True)
+        open(HIDDEN, 'w').close()
+    else:
+        try:
+            os.remove(HIDDEN)
+        except FileNotFoundError:
+            pass
+
+
 def start():
+    set_hidden(False)                           # a widget started or started again is visible
     if running_pid():
         print('already running')
         return
@@ -156,7 +170,9 @@ def main():
     args = sys.argv[1:]
     cmd = args[0] if args else 'toggle'
     if cmd == 'toggle':
-        if not stop():
+        if running_pid() and os.path.exists(HIDDEN):
+            set_hidden(False)
+        elif not stop():
             start()
         else:
             notify('Widget stopped. Open the app again to bring it back.')
@@ -167,8 +183,11 @@ def main():
     elif cmd == 'restart':
         stop()
         start()
+    elif cmd in ('show', 'hide'):
+        set_hidden(cmd == 'hide')
     elif cmd == 'status':
-        print('running' if running_pid() else 'not running')
+        print(('running, minimized' if os.path.exists(HIDDEN) else 'running') if running_pid()
+              else 'not running')
         print('starts at login' if os.path.exists(AUTOSTART) else 'does not start at login')
     elif cmd == 'login':
         os.execv(sys.executable, [sys.executable, os.path.join(APP_DIR, 'spotify_api.py'), 'login'])

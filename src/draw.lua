@@ -148,6 +148,47 @@ local function draw_controls(cr, c, s)
     end
 end
 
+local function draw_window_buttons(cr, w, s)
+    -- minimize (a bar) and close (a cross), white like the skip buttons, full on hover
+    local min_cx, close_cx, cy, h = w[1] * s, w[2] * s, w[3] * s, w[4] * s / 2
+    local half = (w[2] - w[1]) * s / 2              -- each button's hit area is one pitch wide
+    local function shade(cx)
+        cairo_set_source_rgba(cr, 1, 1, 1, hovered(cx - half, cy - half, cx + half, cy + half) and 1 or 0.7)
+    end
+    shade(min_cx)
+    rounded_line(cr, min_cx - h, cy, min_cx + h, cy, 2 * s)
+    shade(close_cx)                                 -- one stroke, so the crossing isn't doubled
+    cairo_move_to(cr, close_cx - h, cy - h)
+    cairo_line_to(cr, close_cx + h, cy + h)
+    rounded_line(cr, close_cx - h, cy + h, close_cx + h, cy - h, 2 * s)
+end
+
+local function draw_heart(cr, h, s)
+    -- Two round lobes with lines tangent to them meeting at the point, shaded like
+    -- minimize/close (white, full on hover); filled Spotify green when liked. The stroke is
+    -- thinner than theirs because a closed outline reads heavier than open lines.
+    local cx, cy, w = h[1] * s, h[2] * s, h[3] * s
+    local on = hovered(h[5] * s, h[6] * s, h[7] * s, h[8] * s)
+    local r = w / 4                                 -- lobe radius; the lobes meet at cx
+    local ty = cy - r * math.sqrt(0.5)              -- lobe centres' y, centring the shape on cy
+    local d = r * math.sqrt(0.5)                    -- tangent points at 45 degrees below the lobes
+    cairo_new_path(cr)
+    cairo_move_to(cr, cx, ty + r * (1 + math.sqrt(2)))
+    cairo_line_to(cr, cx - r - d, ty + d)
+    cairo_arc(cr, cx - r, ty, r, 3 * math.pi / 4, 2 * math.pi)
+    cairo_arc(cr, cx + r, ty, r, math.pi, math.pi / 4)
+    cairo_close_path(cr)
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND)
+    cairo_set_line_width(cr, 1.5 * s)
+    if h[4] == 1 then
+        cairo_set_source_rgba(cr, 0.114, 0.725, 0.329, 1)          -- conky.conf color1
+        cairo_fill_preserve(cr)
+    else
+        cairo_set_source_rgba(cr, 1, 1, 1, on and 1 or 0.7)
+    end
+    cairo_stroke(cr)
+end
+
 local function draw_bar(cr, b, s, pos)
     local x0, x1, y, fraction = b[1] * s, b[2] * s, b[3] * s, b[4]
     if b[5] and b[5] > 0 then fraction = math.min(math.max(pos / b[5], 0), 1) end
@@ -239,7 +280,7 @@ end
 function conky_draw_bar()
     if conky_window == nil then return end
     local d = load_draw()
-    if not (d.scale and d.bar) then return end
+    if not d.scale then return end
     local s = d.scale[1]
 
     -- playback clock: resync on each draw.txt update, advance locally in between
@@ -251,6 +292,9 @@ function conky_draw_bar()
     end
 
     with_cairo(function(cr)
+        if d.window then draw_window_buttons(cr, d.window, s) end
+        if d.heart then draw_heart(cr, d.heart, s) end
+        if not d.bar then return end                -- Spotify not playing: top buttons only
         if d.controls then draw_controls(cr, d.controls, s) end
         draw_bar(cr, d.bar, s, clock.pos)
         if d.lyrics then

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Top-bar (AppIndicator) icon for the widget: shows the current track, toggles
-start-at-login, and quits the whole widget. Started by the launcher's supervisor."""
+start-at-login, minimizes and restores the widget, and quits it. Started by the launcher's supervisor."""
 import os, signal, subprocess, sys
 
 import gi
@@ -17,6 +17,7 @@ from gi.repository import GLib, Gtk
 NAME = 'conky-spotify-nowplaying'
 HERE = os.path.dirname(os.path.abspath(__file__))
 AUTOSTART = os.path.expanduser(f'~/.config/autostart/{NAME}.desktop')
+HIDDEN = os.path.expanduser(f'~/.cache/{NAME}/hidden')   # the widget's minimize button writes it
 LAUNCHER = os.environ.get('CSN_LAUNCHER') or NAME
 
 
@@ -52,6 +53,14 @@ def main():
     menu.append(autostart)
     menu.append(Gtk.SeparatorMenuItem())
 
+    def visibility_label():
+        return 'Show widget' if os.path.exists(HIDDEN) else 'Hide widget'
+
+    visibility = Gtk.MenuItem(label=visibility_label())
+    # Do what the label says: it can be up to one refresh behind the flag file.
+    visibility.connect('activate', lambda item: launcher('show' if item.get_label() == 'Show widget' else 'hide'))
+    menu.append(visibility)
+
     quit_item = Gtk.MenuItem(label='Quit')
     quit_item.connect('activate', lambda _: launcher('stop'))
     menu.append(quit_item)
@@ -60,6 +69,7 @@ def main():
 
     def refresh():
         track.set_label(now_playing())
+        visibility.set_label(visibility_label())
         if autostart.get_active() != os.path.exists(AUTOSTART):
             autostart.set_active(os.path.exists(AUTOSTART))   # changed from the app menu/terminal
         return True

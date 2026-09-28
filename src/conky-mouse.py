@@ -6,6 +6,8 @@ helper subscribes to clicks on conky's window itself:
   - heart: like/unlike the track (or start the Spotify login if not logged in yet)
   - play/pause, previous, next buttons: control playback
   - seek bar: click or drag to change the position in the song
+  - minimize: hide the widget until the tray menu or the launcher shows it again
+  - close: stop the widget, like the tray menu's Quit
   - anywhere else: drag the widget; the position is saved on release
 
 Hit areas come from nowplaying.py (regions.json, logical px, window-relative), since the
@@ -14,6 +16,9 @@ controls move when titles wrap.
 The position lives in ~/.config/conky-spotify-nowplaying/position (root-window x y), not in conky.conf:
 rewriting conky.conf makes conky reload and flash. Instead this helper keeps the window
 at the saved spot, moving it back whenever conky places it elsewhere (startup, reloads).
+
+Minimized is a flag file (~/.cache/conky-spotify-nowplaying/hidden) that the launcher's
+show/hide commands also write; while it exists this helper keeps conky's window unmapped.
 """
 import ctypes, json, os, re, subprocess, sys, time
 
@@ -24,6 +29,8 @@ CACHE = os.path.expanduser('~/.cache/conky-spotify-nowplaying')
 REGIONS = os.path.join(CACHE, 'regions.json')
 SEEK_PREVIEW = os.path.join(CACHE, 'seek-preview')
 LOG = os.path.join(CACHE, 'mouse.log')
+HIDDEN = os.path.join(CACHE, 'hidden')
+LAUNCHER = os.environ.get('CSN_LAUNCHER') or 'conky-spotify-nowplaying'
 BUTTON_PRESS, BUTTON1_MASK = 4, 1 << 8
 BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK = 1 << 2, 1 << 3
 
@@ -33,6 +40,7 @@ x11.XDefaultRootWindow.restype = ctypes.c_ulong
 x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
 x11.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
 x11.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
+x11.XMapWindow.argtypes = x11.XUnmapWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 x11.XFlush.argtypes = [ctypes.c_void_p]
 x11.XPending.argtypes = [ctypes.c_void_p]
 x11.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -183,7 +191,7 @@ def main():
         pass
     d = ctypes.c_void_p(x11.XOpenDisplay(None))
     root = x11.XDefaultRootWindow(d)
-    win, last_check = None, 0.0
+    win, last_check, hidden = None, 0.0, None   # None: not known, e.g. after a restart
     ev = XEvent()
     while True:
         now = time.monotonic()
@@ -203,6 +211,15 @@ def main():
                     target = clamp_to_monitor(*saved, w, h)
                     if (x, y) != target:
                         x11.XMoveWindow(d, win, *target)
+                # Unmapped again every second while hidden, since a conky reload maps it.
+                hide = os.path.exists(HIDDEN)
+                if hide:
+                    x11.XUnmapWindow(d, win)
+                elif hidden is not False:              # a no-op when already mapped
+                    x11.XMapWindow(d, win)
+                    if hidden:
+                        log('shown')
+                hidden = hide
                 x11.XFlush(d)
         while x11.XPending(d):
             x11.XNextEvent(d, ctypes.byref(ev))
@@ -228,6 +245,15 @@ def main():
                 elif hit('next'):
                     subprocess.Popen(['playerctl', '-p', 'spotify', 'next'])
                     log('next')
+                elif hit('minimize'):
+                    open(HIDDEN, 'w').close()
+                    x11.XUnmapWindow(d, win)
+                    x11.XFlush(d)
+                    hidden = True
+                    log('minimize')
+                elif hit('close'):
+                    subprocess.Popen([LAUNCHER, 'stop'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    log('close')
                 elif hit('seek') and regions.get('duration'):
                     seek(d, root, win, regions, s)
                 else:
