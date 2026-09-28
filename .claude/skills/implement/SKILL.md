@@ -68,6 +68,10 @@ The last read lists the pull requests set to close this issue, whatever their
 branch is called; a session started outside this skill names its branch its
 own way.
 
+A branch whose pull request already merged or was closed holds nothing: GitHub
+keeps branches after a merge here, so a reopened issue can still have one. Read
+it with `gh pr list --state all --head <branch> --json number,state`.
+
 - The label, branch or pull request is this session's own, from earlier in
   the conversation (the branch is the one checked out here) -> nobody else
   holds it. Carry on from wherever the work stands.
