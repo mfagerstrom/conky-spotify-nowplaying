@@ -58,7 +58,15 @@ gh issue list --state open --label "In Progress" --json number,title
 gh pr list --state open --json number,headRefName,files \
   --jq '.[]|"\(.number) \(.headRefName): \([.files[].path]|join(", "))"'
 git branch -r --list "origin/*issue-<N>-*"
+gh api graphql -F n=<N> -f query='query($n: Int!) { repository(owner: "mfagerstrom",
+  name: "conky-spotify-nowplaying") { issue(number: $n) {
+  closedByPullRequestsReferences(first: 10) { nodes { number headRefName } } } } }' \
+  --jq '.data.repository.issue.closedByPullRequestsReferences.nodes'
 ```
+
+The last read lists the pull requests set to close this issue, whatever their
+branch is called; a session started outside this skill names its branch its
+own way.
 
 - The label, branch or pull request is this session's own, from earlier in
   the conversation (the branch is the one checked out here) -> nobody else
