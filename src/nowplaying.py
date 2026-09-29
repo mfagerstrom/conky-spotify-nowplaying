@@ -362,7 +362,7 @@ def controls_mid(total):
 def header_scale_for(scale):
     """The text scale for the label, title and artist: `scale`, or as much of it as still
     fits the label row and a line each of title and artist above the controls, in steps of
-    0.05. The controls sit on the artwork's bottom edge whatever the text's size."""
+    0.05, so a larger text scale alone doesn't push the controls below the artwork."""
     global header_scale
     fits = ART_BOTTOM - PLAY_SIZE / 2 - controls_mid('0:00') - TOP_ROW
     header_scale = scale
@@ -394,7 +394,7 @@ def top_buttons(_width, _header_scale):
 
 def plain():
     """Ends a run of text in a font of its own. Not a bare ${font}: that would go back to
-    conky.conf's default, which is tiny because the config can't follow the widget's scale,
+    conky.conf's default, which is tiny because the config can't follow the text scale,
     and conky counts that font into the line's height and baseline. The offsets measured
     above were measured with this font there."""
     return f"${{font {conky_font(PLAIN_FONT)}}}"
@@ -508,17 +508,9 @@ def render():
     heart_box = [heart_cx - heart_size / 2 - 8, MARGIN - 8, min_cx - WINDOW_BUTTON_PITCH / 2,
                  MARGIN + heart_size + 6]
 
-    # The controls row always sits with the play button's bottom on the artwork's bottom.
     total = fmt_time(duration)                # measured for the bar; draw.lua draws both times
-    mid_y = ART_BOTTOM - PLAY_SIZE / 2
     mid_offset = controls_mid(total)
     row = line_height(CONTROL_ROW_FONT)
-    lyr_version = write_lyrics(track_id, duration)
-    if lyr_version:
-        bottom = ART_BOTTOM + LYRIC_GAP + lyrics_height - BOTTOM_TRIM + MARGIN
-    else:
-        bottom = max(mid_y - mid_offset + row, MARGIN + MIN_HEIGHT) + MARGIN
-
     g = f'${{goto {COLUMN_X}}}'
     # Running top of the current line, to place what draw.lua draws.
     y = TOP_ROW
@@ -531,24 +523,16 @@ def render():
     play_cx = prev_cx + SKIP_SIZE / 2 + CONTROL_GAP + PLAY_SIZE / 2
     next_cx = play_cx + PLAY_SIZE / 2 + CONTROL_GAP + SKIP_SIZE / 2
     time_x = next_cx + SKIP_SIZE / 2 + CONTROL_GAP + 4
-    # With the controls row fixed, neither the text scale nor a long title changes the
-    # widget's height: the title (up to 3 lines) and artist (up to 2) give up lines instead
-    # when they would reach into the row.
-    title_lines, artist_lines = wrap(title, TITLE_FONT), wrap(artist, ARTIST_FONT, max_lines=2)
-    def overflows():
-        text_bottom = (y + len(title_lines) * line_height(TITLE_FONT)
-                       + len(artist_lines) * line_height(ARTIST_FONT))
-        return text_bottom + mid_offset + PLAY_SIZE / 2 > ART_BOTTOM
-    while overflows() and len(title_lines) > 1:
-        title_lines = wrap(title, TITLE_FONT, max_lines=len(title_lines) - 1)
-    while overflows() and len(artist_lines) > 1:
-        artist_lines = wrap(artist, ARTIST_FONT, max_lines=len(artist_lines) - 1)
-    for line in title_lines:
+    for line in wrap(title, TITLE_FONT):
         out.append(f"{g}${{color2}}${{font {conky_font(TITLE_FONT)}}}{esc(line)}{plain()}")
         y += line_height(TITLE_FONT)
-    for line in artist_lines:
+    for line in wrap(artist, ARTIST_FONT, max_lines=2):
         out.append(f"{g}${{color}}${{font {conky_font(ARTIST_FONT)}}}{esc(line)}{plain()}")
         y += line_height(ARTIST_FONT)
+    # The play button's bottom meets the artwork's bottom, unless a title or artist wrapped
+    # onto more lines than fit beside it: then the row, and the widget with it, moves down.
+    # The text scale alone never does that (see header_scale_for).
+    mid_y = max(ART_BOTTOM - PLAY_SIZE / 2, y + mid_offset)
     out.append(gap(mid_y - mid_offset - y))
     y = mid_y - mid_offset
     time_w = text_width(total, TIME_FONT)      # elapsed never has more digits than total
@@ -559,6 +543,12 @@ def render():
     bar_x1 = MARGIN + widget_width - time_w - 10
     fraction = min(max(position / duration, 0), 1) if duration else 0
     y += row
+    lyr_version = write_lyrics(track_id, duration)
+    lyrics_top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
+    if lyr_version:
+        bottom = lyrics_top + lyrics_height - BOTTOM_TRIM + MARGIN
+    else:
+        bottom = max(y, MARGIN + MIN_HEIGHT) + MARGIN
 
     draw = [*draw_basics(),
             f'bar {bar_x0} {bar_x1} {mid_y + BAR_DROP} {fraction:.4f} {duration:.3f}',
@@ -571,7 +561,7 @@ def render():
         # Full width under the artwork and controls: reserve lyrics_height there, and
         # draw.lua draws and scrolls as many lines as fit inside it.
         lyric_row = line_height(LYRIC_FONT) + LYRIC_SPACING * text_scale
-        draw.append(f'lyrics {ART_LEFT} {MARGIN + widget_width} {ART_BOTTOM + LYRIC_GAP} {lyric_row} '
+        draw.append(f'lyrics {ART_LEFT} {MARGIN + widget_width} {lyrics_top} {lyric_row} '
                     f'{lyr_version} {lyrics_height}')
     out.append(last_gap(y, bottom))            # the lyrics and the bottom margin
     write_atomic(DRAW, '\n'.join(draw) + '\n')

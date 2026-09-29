@@ -206,15 +206,15 @@ class SizeSettingsTest(support.TempDirTest):
         self.redirect(nowplaying.size_file, PATH='size')
         state = nowplaying.State()
         state.track, state.lyrics = 'track1', {'synced': [(1.0, 'a line'), (2.0, '')]}
-        state.lyrics_key = ('track1', 'Title', 'Artist', 'Album', 200)   # fetched already
         patcher = mock.patch.object(nowplaying, 'state', state)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def render(self, settings):
+    def render(self, settings, title='Title'):
         nowplaying.size_file.save(settings)
+        nowplaying.state.lyrics_key = ('track1', title, 'Artist', 'Album', 200)   # fetched already
         answers = {'status': 'Playing',
-                   'metadata': 'track1\tTitle\tArtist\tAlbum\t\t10000000\t200000000'}
+                   'metadata': f'track1\t{title}\tArtist\tAlbum\t\t10000000\t200000000'}
         with mock.patch.object(nowplaying, 'playerctl', side_effect=lambda cmd, *_: answers[cmd]), \
                 mock.patch.object(nowplaying.threading, 'Thread'), \
                 mock.patch.object(nowplaying.spotify_api, 'write_liked'):
@@ -250,6 +250,14 @@ class SizeSettingsTest(support.TempDirTest):
         self.assertLess(capped, 2.0)
         _, draw, _ = self.render((505, 63, 2.0))
         self.assertEqual(draw['scale'][1:], ['2', f'{capped:g}'])
+
+    def test_a_long_title_wraps_and_moves_the_controls_down(self):
+        _, short, _ = self.render((505, 63, 1.0))
+        text, long, _ = self.render((505, 63, 1.0), title='A title long enough to need a second line '
+                                                          'and then a third one as well')
+        self.assertEqual(text.count('${color2}'), 3)                        # three title lines
+        self.assertGreater(float(long['controls'][3]), float(short['controls'][3]))
+        self.assertGreater(float(long['lyrics'][2]), float(short['lyrics'][2]))
 
     def test_lyrics_height_sets_the_lyrics_area(self):
         _, short, _ = self.render((505, 40, 1.0))
