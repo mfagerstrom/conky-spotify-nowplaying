@@ -78,7 +78,9 @@ No client secret is needed (PKCE). The refresh token is stored in
 `~/.config/conky-spotify-nowplaying/spotify-token.json` with mode 600.
 
 The heart shows a song as liked when any release of it is saved (single, album version, ...),
-matching the Spotify app; unliking from the widget removes every saved release.
+matching the Spotify app; unliking from the widget removes every saved release. Like the app,
+it does not count a copy saved from a duplicate listing of the same album (Spotify sometimes
+lists one album twice, under the same barcode).
 To know which songs you have saved under another release, the widget keeps an index of your
 Liked Songs in `~/.cache/conky-spotify-nowplaying/library.json`. After you log in it reads
 the whole library slowly in the background, one page of 50 songs every 15 seconds (about 25

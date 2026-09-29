@@ -19,9 +19,16 @@ class SpotifyApiTest(support.TempDirTest):
                       TOKEN_FILE='config/spotify-token.json', LIBRARY_FILE='cache/library.json',
                       BACKOFF_FILE='rate-limited-until', LIKED_FILE='liked', LIBRARY_LOCK='cache/library.json.lock',
                       TOGGLED_FILE='liked-toggled', LOCK_FILE='liked.lock')
-        patcher = mock.patch.dict(spotify_api._track_keys, clear=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for cache in (spotify_api._tracks, spotify_api._album_upcs):
+            patcher = mock.patch.dict(cache, clear=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def track(self, uri, key, album=None, upc=None):
+        """Answers what the API would say about a track: its key, album and album UPC."""
+        album = album or 'album-' + uri
+        spotify_api._tracks[uri] = (key, album)
+        spotify_api._album_upcs[album] = upc or 'upc-' + album
 
     def at(self, when):
         """Freezes spotify_api's clock at `when` for the rest of the test."""
@@ -42,11 +49,20 @@ class TrackKeyTest(SpotifyApiTest):
         self.assertEqual(spotify_api._key('Song', 'Artist'), 'song\tartist')
 
     def test_track_key_uses_the_first_artist_and_is_cached(self):
-        track = {'name': 'Under Pressure', 'artists': [{'name': 'Queen'}, {'name': 'David Bowie'}]}
+        track = {'name': 'Under Pressure', 'artists': [{'name': 'Queen'}, {'name': 'David Bowie'}],
+                 'album': {'id': 'hot-space'}}
         with mock.patch.object(spotify_api, 'api', return_value=track) as api:
             self.assertEqual(spotify_api.track_key('spotify:track:abc'), 'under pressure\tqueen')
             self.assertEqual(spotify_api.track_key('spotify:track:abc'), 'under pressure\tqueen')
         api.assert_called_once_with('GET', '/tracks/abc')
+
+    def test_album_upc_is_fetched_once_and_may_be_missing(self):
+        with mock.patch.object(spotify_api, 'api', side_effect=[
+                {'external_ids': {'upc': '859777506334'}}, {}]) as api:
+            self.assertEqual(spotify_api._album_upc('a'), '859777506334')
+            self.assertEqual(spotify_api._album_upc('a'), '859777506334')
+            self.assertIsNone(spotify_api._album_upc('b'))
+        self.assertEqual(api.call_args_list, [mock.call('GET', '/albums/a'), mock.call('GET', '/albums/b')])
 
 
 class LibraryTest(SpotifyApiTest):
@@ -158,7 +174,7 @@ class RefreshLibraryTest(SpotifyApiTest):
     def test_a_heart_click_saved_while_a_page_is_on_its_way_is_kept(self):
         spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {'b\tx': ['spotify:track:2']},
                                    'scan': {'offset': 50, 'keys': {'b\tx': ['spotify:track:2']}}})
-        spotify_api._track_keys['spotify:track:2'] = 'b\tx'
+        self.track('spotify:track:2', 'b\tx')
 
         def api(method, path, **params):
             if path == '/me/tracks':                            # the click lands mid-request
@@ -193,8 +209,9 @@ class RefreshLibraryTest(SpotifyApiTest):
     def test_liked_any_counts_keys_a_scan_has_gathered_so_far(self):
         spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {},
                                    'scan': {'offset': 50, 'keys': {'a\tx': ['spotify:track:album']}}})
-        spotify_api._track_keys['spotify:track:single'] = 'a\tx'
-        spotify_api._track_keys['spotify:track:other'] = 'b\tx'
+        self.track('spotify:track:single', 'a\tx')
+        self.track('spotify:track:album', 'a\tx')
+        self.track('spotify:track:other', 'b\tx')
         with mock.patch.object(spotify_api, 'is_liked', return_value=False):
             self.assertTrue(spotify_api.is_liked_any('spotify:track:single'))
             self.assertFalse(spotify_api.is_liked_any('spotify:track:other'))
@@ -202,7 +219,9 @@ class RefreshLibraryTest(SpotifyApiTest):
     def test_likes_and_unlikes_during_a_scan_outlive_it(self):
         spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {'b\tx': ['spotify:track:2']},
                                    'scan': {'offset': 50, 'keys': {'b\tx': ['spotify:track:2b']}}})
-        spotify_api._track_keys.update({'spotify:track:1': 'a\tx', 'spotify:track:2': 'b\tx'})
+        self.track('spotify:track:1', 'a\tx')
+        self.track('spotify:track:2', 'b\tx')
+        self.track('spotify:track:2b', 'b\tx')
         with mock.patch.object(spotify_api, 'api') as api:
             spotify_api._push_like('spotify:track:1', True)
             spotify_api._push_like('spotify:track:2', False)
@@ -210,6 +229,54 @@ class RefreshLibraryTest(SpotifyApiTest):
         lib = spotify_api._load_library()
         self.assertEqual(lib['keys'], {'a\tx': ['spotify:track:1']})
         self.assertEqual(lib['scan']['keys'], {'a\tx': ['spotify:track:1']})
+
+
+class DuplicateListingTest(SpotifyApiTest):
+    """Spotify sometimes lists one album twice, under two album IDs with one UPC. The app
+    shows a song on one listing as not liked when only its twin on the other is saved."""
+
+    def setUp(self):
+        super().setUp()
+        self.track('spotify:track:playing', 'goner - demo\tkids that fly', 'deluxe', '859777506334')
+        self.track('spotify:track:twin', 'goner - demo\tkids that fly', 'deluxe-again', '859777506334')
+        self.track('spotify:track:single', 'goner - demo\tkids that fly', 'single', '111')
+        patcher = mock.patch.object(spotify_api, 'is_liked', return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def save(self, *uris):
+        spotify_api._save_library({'scanned': NOW, 'total': len(uris),
+                                   'keys': {'goner - demo\tkids that fly': list(uris)}})
+
+    def test_a_saved_twin_listing_does_not_fill_the_heart(self):
+        self.save('spotify:track:twin')
+        self.assertFalse(spotify_api.is_liked_any('spotify:track:playing'))
+
+    def test_a_saved_release_on_another_product_still_does(self):
+        self.save('spotify:track:twin', 'spotify:track:single')
+        self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+
+    def test_the_exact_track_still_does(self):
+        self.save('spotify:track:twin')
+        with mock.patch.object(spotify_api, 'is_liked', return_value=True):
+            self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+
+    def test_albums_without_a_upc_are_never_twins(self):
+        self.track('spotify:track:twin', 'goner - demo\tkids that fly', 'no-upc-1', None)
+        spotify_api._album_upcs['no-upc-1'] = None
+        spotify_api._album_upcs['deluxe'] = None
+        self.save('spotify:track:twin')
+        self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+
+    def test_unliking_leaves_the_twin_saved_and_indexed(self):
+        self.save('spotify:track:playing', 'spotify:track:twin', 'spotify:track:single')
+        with mock.patch.object(spotify_api, 'api') as api:
+            spotify_api._push_like('spotify:track:playing', False)
+        api.assert_called_once_with('DELETE', '/me/library',
+                                    uris='spotify:track:playing,spotify:track:single')
+        self.assertEqual(spotify_api._load_library()['keys'],
+                         {'goner - demo\tkids that fly': ['spotify:track:twin']})
+        self.assertFalse(spotify_api.is_liked_any('spotify:track:playing'))
 
 
 class TimeWindowTest(SpotifyApiTest):
