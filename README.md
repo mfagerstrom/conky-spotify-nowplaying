@@ -21,9 +21,10 @@ sudo add-apt-repository ppa:mfagerstrom/conky-spotify-nowplaying
 sudo apt install conky-spotify-nowplaying
 ```
 
-The PPA builds for Ubuntu 26.04 (`resolute`) only. On another release, download the latest
-`.deb` from the [Releases page](https://github.com/mfagerstrom/conky-spotify-nowplaying/releases)
-and install it with apt instead; a `.deb` installed this way does not update itself:
+The PPA builds for Ubuntu 26.04 (`resolute`) only, and that is the only release the widget is
+tested on. On another release you can try the latest `.deb` from the
+[Releases page](https://github.com/mfagerstrom/conky-spotify-nowplaying/releases) instead; apt
+reports any dependency that release lacks, and a `.deb` installed this way does not update itself:
 
 ```sh
 sudo apt install ./conky-spotify-nowplaying_1.1.0_all.deb
@@ -78,7 +79,8 @@ tells you how long); everything else keeps working.
 
 ## Development
 
-Run straight from a checkout, no install needed (install the dependencies listed under `Depends:` in `debian/control` with apt):
+Run straight from a checkout without installing the package. Its dependencies still have to be
+there: install the ones listed under `Depends:` in `debian/control` with apt.
 
 ```sh
 bin/conky-spotify-nowplaying start
@@ -103,8 +105,8 @@ Packaging lives in `debian/`; the version comes from `debian/changelog`.
 
 Releases are cut with the `/release` skill in Claude Code, and its steps in
 [`.claude/skills/release/SKILL.md`](.claude/skills/release/SKILL.md) are the one written-down
-process. In short: a `debian/changelog` entry (the only place the version lives), the static
-checks, `./build-deb.sh` and a smoke test of the installed package, a commit and tag, a GitHub
+process. In short: a `debian/changelog` entry (the only place the version lives), the
+[static checks](.claude/skills/_shared/static-checks.md), `./build-deb.sh` and a smoke test of the installed package, a commit and tag, a GitHub
 release with the `.deb` attached, and `./release-ppa.sh` to upload the signed source package to
 the PPA (needs `dput` and a GPG key registered on Launchpad), followed until Launchpad publishes
 it.
