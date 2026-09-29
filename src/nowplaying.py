@@ -618,7 +618,8 @@ def render():
             fetch_cover_now = True
             if no_art:
                 log(f'no artwork: {title!r} by {artist!r} ({track_id}), showing the placeholder')
-        # The limit lifting re-checks the heart before it is drawn again.
+        # The limit lifting starts a like check at once, rather than on the next poll; the
+        # heart is drawn again from this render, and fills in when the check answers.
         poll_like = (new_track or now - state.liked_checked > LIKE_POLL_SECONDS
                      or (state.heart_hidden and not heart_hidden))
         if state.heart_hidden != heart_hidden:
