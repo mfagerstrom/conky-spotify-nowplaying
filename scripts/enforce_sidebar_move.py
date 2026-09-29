@@ -20,7 +20,8 @@ stop walks the transcript since the last prompt the user typed and finds the lat
 - `pr: <n> merged` or `pr: <n> closed` from `catchup.py wait`: Completed or Working, or Working
   or Needs Review while another pull request in the ledger is still open
 
-A milestone that leaves a Launchpad build open in the ledger also allows Tests Running. With no
+A Launchpad build or blocking issue still open in the ledger rules out Completed, and an open
+build also allows Tests Running whatever the milestone. With no
 milestone in the turn, a build still open in the session's catch-up ledger calls for Tests
 Running, and a pull request still open there calls for Needs Review. The self review loop runs
 in the foreground and only ends a turn on a question to the user, which is filed under Needs
