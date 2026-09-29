@@ -9,9 +9,10 @@ outside the widget's own dependencies. Only the widget window is captured, never
 the rest of the screen.
 
 The window is translucent and holds premultiplied ARGB, in which Conky's image draw
-leaves near-white channels above their pixel's alpha. The compositor adds those, so
-they show as white; each channel is clamped to 255 as it is un-premultiplied, where
-GDK's own capture wraps it round to a dark value and shows false colour.
+leaves bright channels (anything above the window's alpha of 240) above their pixel's
+alpha. The compositor adds those, so they show at full strength; each channel is
+clamped to 255 as it is un-premultiplied, where GDK's own capture wraps it round to a
+dark value and shows false colour (a white sky speckled yellow, orange turned green).
 """
 import ctypes
 import re
