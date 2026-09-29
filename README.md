@@ -14,8 +14,9 @@ A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Co
 - Drag an edge or corner to resize it: the sides set its width, the top and bottom how many
   lines of lyrics it shows. An outline shows the new size until you let go; the text keeps
   its size, and the size is remembered
-- Top-bar icon with the current track, Text scaling (70% to 200%, the widget keeps its size),
-  Reset widget size, an Always on top toggle, start-at-login toggle, Show / Hide widget and Quit
+- Top-bar icon with the current track, Text scaling (70% to 200%; the widget keeps its size,
+  unless larger text wraps a title onto another line), Reset widget size, an Always on top
+  toggle, start-at-login toggle, Show / Hide widget and Quit
 
 ## Install
 

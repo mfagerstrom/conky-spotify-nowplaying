@@ -531,7 +531,8 @@ def render():
         y += line_height(ARTIST_FONT)
     # The play button's bottom meets the artwork's bottom, unless a title or artist wrapped
     # onto more lines than fit beside it: then the row, and the widget with it, moves down.
-    # The text scale alone never does that (see header_scale_for).
+    # A line each of title and artist always fits (see header_scale_for), so the text scale
+    # moves it only when larger text makes the title or artist wrap.
     mid_y = max(ART_BOTTOM - PLAY_SIZE / 2, y + mid_offset)
     out.append(gap(mid_y - mid_offset - y))
     y = mid_y - mid_offset
