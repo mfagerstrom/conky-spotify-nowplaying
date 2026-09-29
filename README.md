@@ -106,10 +106,10 @@ Packaging lives in `debian/`; the version comes from `debian/changelog`.
 Releases are cut with the `/release` skill in Claude Code, and its steps in
 [`.claude/skills/release/SKILL.md`](.claude/skills/release/SKILL.md) are the one written-down
 process. In short: a `debian/changelog` entry (the only place the version lives), the
-[static checks](.claude/skills/_shared/static-checks.md), `./build-deb.sh` and a smoke test of the installed package, a commit and tag, a GitHub
-release with the `.deb` attached, and `./release-ppa.sh` to upload the signed source package to
-the PPA (needs `dput` and a GPG key registered on Launchpad), followed until Launchpad publishes
-it.
+[static checks](.claude/skills/_shared/static-checks.md), `./build-deb.sh` and a smoke test of
+the installed package, a commit and tag, a GitHub release with the `.deb` attached, and
+`./release-ppa.sh` to upload the signed source package to the PPA (needs `dput` and a GPG key
+registered on Launchpad), followed until Launchpad publishes it.
 
 ## How it works
 
