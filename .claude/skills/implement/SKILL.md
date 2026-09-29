@@ -139,7 +139,7 @@ Only one widget runs per desktop, and every copy shares one pid file, so
 `stop` stops whichever copy is running. Look first: a widget running from
 another worktree's `src/` is another session's test, and this one waits for
 it rather than stopping it. For a visual change, take the before capture now,
-while the installed copy is still up.
+while the copy that was running is still up.
 
 ```bash
 pgrep -af 'nowplaying.py'               # which copy runs, if any: note it
@@ -165,7 +165,9 @@ scripts/capture-widget.py <scratchpad>/widget-after.png
 What the widget shows depends on Spotify: when nothing is playing, say so and
 say what could not be looked at. A change to how the program finds its files
 or starts is also checked installed, as in `/release` step 4, because a path
-bug can exist only under `/usr`.
+bug can exist only under `/usr`. After that installed check, run the stop
+and start above from the checkout again, so the checkout copy is the one
+left running.
 
 Afterwards, leave the checkout copy running. Never stop it to start the
 installed copy again; the report says the checkout copy was left running.
@@ -216,6 +218,7 @@ Tell the user, briefly:
 
 - the issue and pull request links, and what changed;
 - what was run and what it showed, and anything that was not verified;
+- after a run from the checkout, that the checkout copy was left running;
 - the judgment calls, one line each;
 - how many self review passes ran, and what they found and fixed.
 
