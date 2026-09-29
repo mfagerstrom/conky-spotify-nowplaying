@@ -17,7 +17,7 @@ class SpotifyApiTest(support.TempDirTest):
         super().setUp()
         self.redirect(spotify_api, CONF_DIR='config', CACHE_DIR='cache',
                       TOKEN_FILE='config/spotify-token.json', LIBRARY_FILE='cache/library.json',
-                      BACKOFF_FILE='rate-limited-until', LIKED_FILE='liked',
+                      BACKOFF_FILE='rate-limited-until', LIKED_FILE='liked', LIBRARY_LOCK='cache/library.json.lock',
                       TOGGLED_FILE='liked-toggled', LOCK_FILE='liked.lock')
         patcher = mock.patch.dict(spotify_api._track_keys, clear=True)
         patcher.start()
@@ -79,6 +79,137 @@ class LibraryTest(SpotifyApiTest):
         with open(spotify_api.LIBRARY_FILE, 'w') as f:
             f.write('{not json')
         self.assertIsNone(spotify_api._load_library())
+
+
+def page(offset, total, items):
+    return {'offset': offset, 'limit': 50, 'total': total, 'items': items,
+            'next': 'more' if offset + 50 < total else None}
+
+
+class RefreshLibraryTest(SpotifyApiTest):
+
+    def setUp(self):
+        super().setUp()
+        self.at(NOW)
+
+    def refresh(self, response):
+        """One refresh_library() call answered with `response`; returns (index, the call)."""
+        with mock.patch.object(spotify_api, 'api', return_value=response) as api:
+            lib = spotify_api.refresh_library()
+        api.assert_called_once()
+        return lib, api.call_args
+
+    def test_missing_index_starts_a_scan_with_one_request_and_saves_it(self):
+        lib, call = self.refresh(page(0, 120, [saved('spotify:track:1', 'A', 'X')]))
+        self.assertEqual(call, mock.call('GET', '/me/tracks', limit=50, offset=0))
+        self.assertEqual(lib['scan'], {'offset': 50, 'keys': {'a\tx': ['spotify:track:1']}})
+        self.assertEqual((lib['scanned'], lib['total']), (0, 120))
+        self.assertEqual(spotify_api._load_library(), lib)
+        self.assertEqual(spotify_api.scan_offset(), 50)
+
+    def test_a_scan_in_progress_resumes_from_its_saved_offset(self):
+        spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {},
+                                   'scan': {'offset': 50, 'keys': {'a\tx': ['spotify:track:1']}}})
+        lib, call = self.refresh(page(50, 120, [saved('spotify:track:2', 'B', 'X')]))
+        self.assertEqual(call, mock.call('GET', '/me/tracks', limit=50, offset=50))
+        self.assertEqual(lib['scan']['offset'], 100)
+        self.assertEqual(set(lib['scan']['keys']), {'a\tx', 'b\tx'})
+
+    def test_a_429_keeps_the_saved_offset(self):
+        before = {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 50, 'keys': {}}}
+        spotify_api._save_library(before)
+        with mock.patch.object(spotify_api, 'api', side_effect=spotify_api.RateLimited(NOW + 60)):
+            with self.assertRaises(spotify_api.RateLimited):
+                spotify_api.refresh_library()
+        self.assertEqual(spotify_api._load_library(), before)
+
+    def test_the_last_page_replaces_the_keys_and_ends_the_scan(self):
+        spotify_api._save_library({'scanned': NOW - 90_000, 'total': 60,
+                                   'keys': {'gone\tx': ['spotify:track:old']},
+                                   'scan': {'offset': 50, 'keys': {'a\tx': ['spotify:track:1']}}})
+        lib, _ = self.refresh(page(50, 60, [saved('spotify:track:2', 'B', 'X')]))
+        self.assertNotIn('scan', lib)
+        self.assertEqual(lib['keys'], {'a\tx': ['spotify:track:1'], 'b\tx': ['spotify:track:2']})
+        self.assertEqual((lib['scanned'], lib['total']), (NOW, 60))
+        self.assertIsNone(spotify_api.scan_offset())
+
+    def test_a_one_page_library_is_scanned_in_one_call(self):
+        lib, _ = self.refresh(page(0, 1, [saved('spotify:track:1', 'A', 'X')]))
+        self.assertNotIn('scan', lib)
+        self.assertEqual((lib['scanned'], lib['keys']), (NOW, {'a\tx': ['spotify:track:1']}))
+
+    def test_a_fresh_index_only_reads_the_newest_likes(self):
+        spotify_api._save_library({'scanned': NOW - 60, 'total': 120, 'keys': {'a\tx': ['spotify:track:1']}})
+        lib, _ = self.refresh(page(0, 121, [saved('spotify:track:2', 'B', 'X')]))
+        self.assertNotIn('scan', lib)
+        self.assertEqual(set(lib['keys']), {'a\tx', 'b\tx'})
+        self.assertEqual((lib['scanned'], lib['total']), (NOW - 60, 121))
+
+    def test_a_stale_or_shrunk_index_starts_a_scan_and_keeps_answering_meanwhile(self):
+        cases = [('stale', NOW - 90_000, 120), ('shrunk', NOW - 60, 119)]
+        for name, scanned, total in cases:
+            with self.subTest(name):
+                old = {'a\tx': ['spotify:track:1']}
+                spotify_api._save_library({'scanned': scanned, 'total': 120, 'keys': old})
+                lib, _ = self.refresh(page(0, total, [saved('spotify:track:2', 'B', 'X')]))
+                self.assertEqual(lib['scan']['offset'], 50)
+                self.assertEqual(lib['keys'], old)
+
+    def test_a_heart_click_saved_while_a_page_is_on_its_way_is_kept(self):
+        spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {'b\tx': ['spotify:track:2']},
+                                   'scan': {'offset': 50, 'keys': {'b\tx': ['spotify:track:2']}}})
+        spotify_api._track_keys['spotify:track:2'] = 'b\tx'
+
+        def api(method, path, **params):
+            if path == '/me/tracks':                            # the click lands mid-request
+                with mock.patch.object(spotify_api, 'api'):
+                    spotify_api._push_like('spotify:track:2', False)
+                return page(50, 120, [saved('spotify:track:3', 'C', 'X')])
+
+        with mock.patch.object(spotify_api, 'api', side_effect=api):
+            lib = spotify_api.refresh_library()
+        self.assertEqual(lib['keys'], {})
+        self.assertEqual(lib['scan'], {'offset': 100, 'keys': {'c\tx': ['spotify:track:3']}})
+        self.assertEqual(spotify_api._load_library(), lib)
+
+    def test_a_page_right_after_a_heart_click_is_fetched_again(self):
+        before = {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 50, 'keys': {}}}
+        spotify_api._save_library(before)
+        open(spotify_api.TOGGLED_FILE, 'w').close()
+        os.utime(spotify_api.TOGGLED_FILE, (NOW - 5, NOW - 5))
+        lib, _ = self.refresh(page(50, 120, [saved('spotify:track:2', 'B', 'X')]))
+        self.assertEqual(lib, before)
+        self.assertEqual(spotify_api._load_library(), before)
+
+    def test_a_page_for_an_offset_the_scan_has_left_is_dropped(self):
+        with mock.patch.object(spotify_api, 'api', return_value=page(100, 120, [])) as api:
+            with mock.patch.object(spotify_api, '_load_library', side_effect=[
+                    {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 100, 'keys': {}}},
+                    {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 50, 'keys': {}}}]):
+                lib = spotify_api.refresh_library()
+        api.assert_called_once()
+        self.assertEqual(lib['scan']['offset'], 50)
+
+    def test_liked_any_counts_keys_a_scan_has_gathered_so_far(self):
+        spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {},
+                                   'scan': {'offset': 50, 'keys': {'a\tx': ['spotify:track:album']}}})
+        spotify_api._track_keys['spotify:track:single'] = 'a\tx'
+        spotify_api._track_keys['spotify:track:other'] = 'b\tx'
+        with mock.patch.object(spotify_api, 'is_liked', return_value=False):
+            self.assertTrue(spotify_api.is_liked_any('spotify:track:single'))
+            self.assertFalse(spotify_api.is_liked_any('spotify:track:other'))
+
+    def test_likes_and_unlikes_during_a_scan_outlive_it(self):
+        spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {'b\tx': ['spotify:track:2']},
+                                   'scan': {'offset': 50, 'keys': {'b\tx': ['spotify:track:2b']}}})
+        spotify_api._track_keys.update({'spotify:track:1': 'a\tx', 'spotify:track:2': 'b\tx'})
+        with mock.patch.object(spotify_api, 'api') as api:
+            spotify_api._push_like('spotify:track:1', True)
+            spotify_api._push_like('spotify:track:2', False)
+        api.assert_called_with('DELETE', '/me/library', uris='spotify:track:2,spotify:track:2b')
+        lib = spotify_api._load_library()
+        self.assertEqual(lib['keys'], {'a\tx': ['spotify:track:1']})
+        self.assertEqual(lib['scan']['keys'], {'a\tx': ['spotify:track:1']})
 
 
 class TimeWindowTest(SpotifyApiTest):
