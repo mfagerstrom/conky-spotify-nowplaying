@@ -308,7 +308,7 @@ class FetchLyricsTest(support.TempDirTest):
 
     def setUp(self):
         super().setUp()
-        self.redirect(nowplaying, LOG='nowplaying.log')
+        self.redirect(nowplaying, LOG='nowplaying.log', LYRICS_CACHE='lyrics')
         self.state = nowplaying.State()
         self.state.lyrics_key = self.KEY
         patcher = mock.patch.object(nowplaying, 'state', self.state)
@@ -361,6 +361,87 @@ class FetchLyricsTest(support.TempDirTest):
         self.state.lyrics_key = ('spotify:track:2', 'Other', 'Artist', 'Album', 180)
         self.fetch(get={'syncedLyrics': SYNCED})
         self.assertIsNone(self.state.lyrics)
+
+
+class LyricsCacheTest(FetchLyricsTest):
+    """The on-disk cache in front of LRCLIB. Inherits FetchLyricsTest's setup and helper;
+    its tests run here again too, which checks they hold with the cache in place."""
+
+    def replay(self, **lrclib):
+        """Plays the track again, as after a restart: fresh state, same key."""
+        self.state.lyrics = None
+        return self.fetch(**lrclib)
+
+    def age(self, key, seconds):
+        path = nowplaying.lyrics_cache_path(key)
+        entry = json.loads(support.read(path))
+        entry['fetched'] -= seconds
+        nowplaying.write_atomic(path, json.dumps(entry))
+
+    def test_fetched_lyrics_are_cached_and_replayed_without_lrclib(self):
+        self.fetch(get={'syncedLyrics': SYNCED})
+        self.assertTrue(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
+        mocked = self.replay(get={'syncedLyrics': '[00:09.00]changed'})
+        self.assertEqual(mocked.call_count, 0)
+        self.assertEqual(self.state.lyrics, {'synced': [(1.5, 'First'), (4.0, 'Second'), (62.25, 'Third')]})
+        self.assertIn('synced lines for Artist - Song (200 s), from the cache',
+                      support.read(nowplaying.LOG))
+
+    def test_the_cache_is_keyed_by_the_lookup_not_the_spotify_id(self):
+        self.fetch(get={'syncedLyrics': SYNCED})
+        self.assertEqual(nowplaying.lyrics_cache_path(self.KEY),
+                         nowplaying.lyrics_cache_path(('spotify:track:9',) + self.KEY[1:]))
+        self.assertNotEqual(nowplaying.lyrics_cache_path(self.KEY),
+                            nowplaying.lyrics_cache_path(self.KEY[:4] + (201,)))
+
+    def test_no_lyrics_is_cached_until_it_expires(self):
+        self.fetch(get=None)
+        self.assertEqual(self.state.lyrics, {})
+        self.age(self.KEY, nowplaying.NO_LYRICS_TTL - 60)
+        self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 0)
+        self.assertEqual(self.state.lyrics, {})
+        self.age(self.KEY, 120)
+        self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 1)
+        self.assertEqual(self.state.lyrics['synced'][0], (1.5, 'First'))
+
+    def test_synced_lyrics_do_not_expire(self):
+        self.fetch(get={'syncedLyrics': SYNCED})
+        self.age(self.KEY, 365 * 24 * 3600)
+        self.assertEqual(self.replay().call_count, 0)
+        self.assertEqual(len(self.state.lyrics['synced']), 3)
+
+    def test_failed_lookup_is_not_cached_and_still_retries(self):
+        for error in (urllib.error.URLError('offline'), support.http_error(500)):
+            with mock.patch.object(nowplaying, '_lrclib', side_effect=error):
+                nowplaying.fetch_lyrics(self.KEY)
+            self.assertFalse(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
+            self.assertIsNotNone(self.state.lyrics_retry)
+            self.state.lyrics_retry = None
+        self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 1)
+
+    def test_an_unreadable_entry_is_looked_up_again(self):
+        os.makedirs(nowplaying.LYRICS_CACHE)
+        for broken in ('not json', '{}', '{"fetched": 0, "synced": [[1]]}'):
+            with open(nowplaying.lyrics_cache_path(self.KEY), 'w') as f:
+                f.write(broken)
+            self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 1, broken)
+
+    def test_the_cache_stays_under_its_cap_dropping_the_least_recently_used(self):
+        keys = [(f'spotify:track:{i}', f'Song {i}', 'Artist', 'Album', 200) for i in range(5)]
+        with mock.patch.object(nowplaying, 'LYRICS_CACHE_MAX', 3):
+            for i, key in enumerate(keys):
+                self.state.lyrics_key = key
+                with mock.patch.object(nowplaying, '_lrclib', return_value={'syncedLyrics': SYNCED}):
+                    nowplaying.fetch_lyrics(key)
+                path = nowplaying.lyrics_cache_path(key)
+                os.utime(path, (1000 + i, 1000 + i))
+                if i == 1:                   # song 0 is played again, so song 1 is now oldest
+                    self.state.lyrics_key = keys[0]
+                    nowplaying.fetch_lyrics(keys[0])
+                    self.assertGreater(os.path.getmtime(nowplaying.lyrics_cache_path(keys[0])), 2000)
+            kept = {k[1] for k in keys if os.path.exists(nowplaying.lyrics_cache_path(k))}
+        self.assertEqual(len(os.listdir(nowplaying.LYRICS_CACHE)), 3)
+        self.assertEqual(kept, {'Song 0', 'Song 3', 'Song 4'})
 
 
 if __name__ == '__main__':

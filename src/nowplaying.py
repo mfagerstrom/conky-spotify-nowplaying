@@ -11,9 +11,10 @@ which conky.conf renders with ${execpi}. It covers:
   - the heart, minimize and close buttons at the top right (drawn by draw.lua)
   - like state (heart), via spotify_api.py; refreshed on track change and every 10 s
   - synced lyrics from LRCLIB (lrclib.net) -> lyrics.txt; draw.lua scrolls them smoothly
-    (previous / current / next line). Tracks with only unsynced lyrics show none.
+    (previous / current / next line). Tracks with only unsynced lyrics show none. Each
+    answer is cached on disk per track (lyrics/), so a track played again is not looked up.
 """
-import functools, json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
+import functools, hashlib, json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
 import gi
 gi.require_version('Pango', '1.0'); gi.require_version('PangoCairo', '1.0'); gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Pango, PangoCairo
@@ -33,6 +34,9 @@ LOG = os.path.join(CACHE, 'nowplaying.log')
 BG = os.path.join(CACHE, 'bg.txt')               # background colour from the album art, for draw.lua
 DRAW = os.path.join(CACHE, 'draw.txt')           # geometry + playback clock for draw.lua
 LYRICS = os.path.join(CACHE, 'lyrics.txt')       # timed lyric lines for draw.lua
+LYRICS_CACHE = os.path.join(CACHE, 'lyrics')     # one JSON file per track looked up on LRCLIB
+LYRICS_CACHE_MAX = 2000                          # files kept; the least recently used go first
+NO_LYRICS_TTL = 7 * 24 * 3600                    # LRCLIB gains lyrics, so "none" is asked again
 
 # Layout, in conky's logical pixels. conky.conf sets no size or margin: the window is as big
 # as this markup, which carries the margins and, through a goto, the width. The user's size
@@ -243,11 +247,60 @@ def log(msg):
         f.write(time.strftime('%T ') + msg + '\n')
 
 
+def lyrics_cache_path(key):
+    """The cache file for a lookup. It is named by what LRCLIB is asked (title, artist,
+    album, whole seconds), not the Spotify id, so a track whose metadata changes after
+    the lookup is looked up again rather than served the old answer."""
+    _track_id, title, artist, album, duration = key
+    name = hashlib.sha1(json.dumps([title, artist, album, int(duration)]).encode()).hexdigest()
+    return os.path.join(LYRICS_CACHE, name + '.json')
+
+
+def read_cached_lyrics(key):
+    """The cached lyrics for key as fetch_lyrics would set them, or None when there is no
+    usable entry: none at all, unreadable, or an expired "no synced lyrics" answer."""
+    path = lyrics_cache_path(key)
+    try:
+        with open(path) as f:
+            entry = json.load(f)
+        synced = [(float(sec), str(line)) for sec, line in entry['synced']]
+        if not synced and time.time() - entry['fetched'] > NO_LYRICS_TTL:
+            return None
+        os.utime(path)                           # mark it used, for pruning
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return {'synced': synced} if synced else {}
+
+
+def cache_lyrics(key, lyrics):
+    """Saves a successful lookup, then prunes the least recently used entries past
+    LYRICS_CACHE_MAX. A failure here costs only the cache, never the lyrics on screen."""
+    try:
+        os.makedirs(LYRICS_CACHE, exist_ok=True)
+        write_atomic(lyrics_cache_path(key),
+                     json.dumps({'fetched': time.time(), 'synced': lyrics.get('synced', [])}))
+        with os.scandir(LYRICS_CACHE) as entries:
+            files = [(e.stat().st_mtime, e.path) for e in entries if e.name.endswith('.json')]
+        for _, path in sorted(files)[:max(0, len(files) - LYRICS_CACHE_MAX)]:
+            os.remove(path)
+    except OSError as e:
+        log(f'lyrics cache write failed: {type(e).__name__}: {e}')
+
+
 def fetch_lyrics(key):
+    """Synced lyrics only (unsynced ones aren't shown), from the cache when it has them.
+    Otherwise LRCLIB: exact match first (it wants whole seconds), then the closest-length
+    search hit with synced lyrics, and the answer is cached, "none" included.
+    Network errors leave state.lyrics as None so the next render retries, and are not cached."""
     track_id, title, artist, album, duration = key
-    """Synced lyrics only (unsynced ones aren't shown). Exact match first (LRCLIB wants
-    whole seconds), then the closest-length search hit with synced lyrics.
-    Network errors leave state.lyrics as None so the next render retries."""
+    lyrics = read_cached_lyrics(key)
+    if lyrics is not None:
+        log(f"lyrics: {len(lyrics.get('synced', []))} synced lines for {artist} - {title} "
+            f"({duration:.0f} s), from the cache")
+        with state.lock:
+            if state.lyrics_key == key:
+                state.lyrics = lyrics
+        return
     try:
         record = _lrclib('get', artist_name=artist, track_name=title, album_name=album,
                          duration=int(duration))
@@ -280,6 +333,7 @@ def fetch_lyrics(key):
                 synced.append((int(m[1]) * 60 + float(m[2]), m[3].strip()))
         lyrics['synced'] = synced
     log(f"lyrics: {len(lyrics.get('synced', []))} synced lines for {artist} - {title} ({duration:.0f} s)")
+    cache_lyrics(key, lyrics)
     with state.lock:
         if state.lyrics_key == key:
             state.lyrics = lyrics
