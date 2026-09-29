@@ -349,6 +349,13 @@ def lyrics_summary(lyrics):
     return f'{len(lyrics[kind])} {kind} lines' if kind else 'none'
 
 
+def retry_lyrics(key):
+    """Has the next render look the lyrics up again in 30 s, if the track still plays."""
+    with state.lock:
+        if state.lyrics_key == key:
+            state.lyrics_retry = time.time() + 30
+
+
 def fetch_lyrics(key):
     """The track's lyrics, from the cache when it has them. Otherwise LRCLIB: the exact
     match (it wants whole seconds), then the closest-length search hit with synced lyrics.
@@ -379,14 +386,9 @@ def fetch_lyrics(key):
             synced = closest([h for h in hits if h.get('syncedLyrics')], duration)
             if synced or not (record or {}).get('plainLyrics'):
                 record = synced or closest([h for h in hits if h.get('plainLyrics')], duration)
-        if get_failed and not record:
-            # Only the exact match can rule the lyrics out, so "none" waits for it.
-            raise LookupError('exact match failed and the search found nothing')
     except Exception as e:
         log(f'lyrics lookup failed ({type(e).__name__}), retrying in 30 s: {artist} - {title}')
-        with state.lock:
-            if state.lyrics_key == key:
-                state.lyrics_retry = time.time() + 30
+        retry_lyrics(key)
         return
     lyrics, record = {}, record or {}
     synced = []
@@ -398,6 +400,11 @@ def fetch_lyrics(key):
         lyrics['synced'] = synced
     elif record.get('plainLyrics'):                  # also when no synced line had a timestamp
         lyrics['plain'] = plain_lines(record['plainLyrics'])
+    if get_failed and not lyrics:
+        # Only the exact match can rule the lyrics out, so "none" waits for it.
+        log(f'lyrics: none from the search, retrying in 30 s: {artist} - {title}')
+        retry_lyrics(key)
+        return
     log(f'lyrics: {lyrics_summary(lyrics)} for {artist} - {title} ({duration:.0f} s)')
     cache_lyrics(key, lyrics)
     with state.lock:

@@ -515,6 +515,15 @@ class FetchLyricsTest(support.TempDirTest):
         self.assertIsNotNone(self.state.lyrics_retry)
         self.assertFalse(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
 
+    def test_a_failed_exact_match_and_an_untimed_search_hit_retry_uncached(self):
+        self.fetch_with_failing_get(support.http_error(500),
+                                    search=[{'duration': 200, 'syncedLyrics': 'no timestamps'}])
+        self.assertIsNone(self.state.lyrics)
+        self.assertIsNotNone(self.state.lyrics_retry)
+        self.assertFalse(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
+        self.assertIn('lyrics: none from the search, retrying in 30 s: Artist - Song',
+                      support.read(nowplaying.LOG))
+
     def test_a_404_exact_match_still_caches_no_lyrics(self):
         self.fetch(get=None, search=[])                 # _lrclib turns a 404 into None
         self.assertEqual(self.state.lyrics, {})
