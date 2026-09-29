@@ -354,8 +354,10 @@ def fetch_lyrics(key):
     match (it wants whole seconds), then the closest-length search hit with synced lyrics.
     Synced lyrics always win; plain ones are kept only when no synced version is close
     enough: the exact match's, else the closest search hit's. The answer is cached, "none"
-    included. Network errors leave state.lyrics as None so the next render retries, and
-    are not cached."""
+    included. An exact match that fails (a server error, a timeout) is skipped for the
+    search. Network errors that leave nothing found (the search failing, or finding nothing
+    after the exact match failed) leave state.lyrics as None so the next render retries 30 s
+    on, and are not cached."""
     track_id, title, artist, album, duration = key
     lyrics = read_cached_lyrics(key)
     if lyrics is not None:
@@ -367,11 +369,19 @@ def fetch_lyrics(key):
     try:
         record = _lrclib('get', artist_name=artist, track_name=title, album_name=album,
                          duration=int(duration))
+        get_failed = False
+    except Exception as e:                           # a server error or timeout: the search often still answers
+        log(f'lyrics: exact match failed ({type(e).__name__}), using the search: {artist} - {title}')
+        record, get_failed = None, True
+    try:
         if not (record or {}).get('syncedLyrics'):
             hits = _lrclib('search', track_name=title, artist_name=artist) or []
             synced = closest([h for h in hits if h.get('syncedLyrics')], duration)
             if synced or not (record or {}).get('plainLyrics'):
                 record = synced or closest([h for h in hits if h.get('plainLyrics')], duration)
+        if get_failed and not record:
+            # Only the exact match can rule the lyrics out, so "none" waits for it.
+            raise LookupError('exact match failed and the search found nothing')
     except Exception as e:
         log(f'lyrics lookup failed ({type(e).__name__}), retrying in 30 s: {artist} - {title}')
         with state.lock:

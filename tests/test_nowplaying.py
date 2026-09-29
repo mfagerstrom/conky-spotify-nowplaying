@@ -465,6 +465,63 @@ class FetchLyricsTest(support.TempDirTest):
         self.assertGreaterEqual(self.state.lyrics_retry, before + 30)
         self.assertLessEqual(self.state.lyrics_retry, time.time() + 30)
 
+    def fetch_with_failing_get(self, error, search):
+        def lrclib(path, **params):
+            if path == 'get':
+                raise error
+            if isinstance(search, Exception):
+                raise search
+            return list(search)
+        with mock.patch.object(nowplaying, '_lrclib', side_effect=lrclib) as mocked:
+            nowplaying.fetch_lyrics(self.KEY)
+        return mocked
+
+    GET_ERRORS = (support.http_error(503), urllib.error.URLError(TimeoutError('timed out')),
+                  TimeoutError('The read operation timed out'))
+
+    def test_a_failed_exact_match_falls_through_to_the_search(self):
+        for error in self.GET_ERRORS:
+            with self.subTest(error=error):
+                self.state.lyrics = None
+                mocked = self.fetch_with_failing_get(
+                    error, search=[{'duration': 200, 'syncedLyrics': '[00:01.00]found'}])
+                self.assertEqual(mocked.call_count, 2)
+                self.assertEqual(self.state.lyrics, {'synced': [(1.0, 'found')]})
+                self.assertIsNone(self.state.lyrics_retry)
+                self.assertTrue(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
+                os.remove(nowplaying.lyrics_cache_path(self.KEY))
+        log = support.read(nowplaying.LOG)
+        self.assertIn('lyrics: exact match failed (HTTPError), using the search: Artist - Song', log)
+        self.assertIn('lyrics: exact match failed (URLError), using the search: Artist - Song', log)
+        self.assertIn('lyrics: exact match failed (TimeoutError), using the search: Artist - Song', log)
+        self.assertNotIn('retrying', log)
+
+    def test_a_failed_exact_match_and_a_failed_search_retry_uncached(self):
+        for error in self.GET_ERRORS:
+            with self.subTest(error=error):
+                before = time.time()
+                self.fetch_with_failing_get(error, search=support.http_error(502))
+                self.assertIsNone(self.state.lyrics)
+                self.assertGreaterEqual(self.state.lyrics_retry, before + 30)
+                self.assertFalse(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
+                self.state.lyrics_retry = None
+        self.assertIn('lyrics lookup failed (HTTPError), retrying in 30 s: Artist - Song',
+                      support.read(nowplaying.LOG))
+
+    def test_a_failed_exact_match_and_an_empty_search_retry_uncached(self):
+        self.fetch_with_failing_get(support.http_error(500),
+                                    search=[{'duration': 250, 'syncedLyrics': '[00:01.00]too far'}])
+        self.assertIsNone(self.state.lyrics)
+        self.assertIsNotNone(self.state.lyrics_retry)
+        self.assertFalse(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
+
+    def test_a_404_exact_match_still_caches_no_lyrics(self):
+        self.fetch(get=None, search=[])                 # _lrclib turns a 404 into None
+        self.assertEqual(self.state.lyrics, {})
+        self.assertIsNone(self.state.lyrics_retry)
+        self.assertTrue(os.path.exists(nowplaying.lyrics_cache_path(self.KEY)))
+        self.assertNotIn('exact match failed', support.read(nowplaying.LOG))
+
     def test_result_for_a_track_no_longer_playing_is_dropped(self):
         self.state.lyrics_key = ('spotify:track:2', 'Other', 'Artist', 'Album', 180)
         self.fetch(get={'syncedLyrics': SYNCED})
