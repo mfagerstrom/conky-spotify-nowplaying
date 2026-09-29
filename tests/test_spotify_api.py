@@ -172,6 +172,15 @@ class RefreshLibraryTest(SpotifyApiTest):
         self.assertEqual(lib['scan'], {'offset': 100, 'keys': {'c\tx': ['spotify:track:3']}})
         self.assertEqual(spotify_api._load_library(), lib)
 
+    def test_a_page_right_after_a_heart_click_is_fetched_again(self):
+        before = {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 50, 'keys': {}}}
+        spotify_api._save_library(before)
+        open(spotify_api.TOGGLED_FILE, 'w').close()
+        os.utime(spotify_api.TOGGLED_FILE, (NOW - 5, NOW - 5))
+        lib, _ = self.refresh(page(50, 120, [saved('spotify:track:2', 'B', 'X')]))
+        self.assertEqual(lib, before)
+        self.assertEqual(spotify_api._load_library(), before)
+
     def test_a_page_for_an_offset_the_scan_has_left_is_dropped(self):
         with mock.patch.object(spotify_api, 'api', return_value=page(100, 120, [])) as api:
             with mock.patch.object(spotify_api, '_load_library', side_effect=[

@@ -267,6 +267,9 @@ def refresh_library(max_age=24 * 3600):
                offset=before['scan']['offset'] if before and 'scan' in before else 0)
     with _library_lock():
         lib = _load_library()                   # again: a heart click may have saved meanwhile
+        if recently_toggled():
+            # the page may predate the click and put back a song it just unliked; fetch it again
+            return lib or {'scanned': 0, 'total': 0, 'keys': {}}
         if lib and 'scan' in lib:
             if lib['scan']['offset'] != page['offset']:
                 return lib                      # another copy of the widget moved it on
@@ -283,16 +286,13 @@ def refresh_library(max_age=24 * 3600):
         lib['scan'] = {'offset': 0, 'keys': {}}
         return _scan_page(lib, page)
 
+
 def is_liked_any(uri):
     """What the heart shows: this track, or any same-titled release by the same artist."""
     if is_liked(uri):
         return True
-    lib = _load_library()
-    if not lib:
-        return False
-    key = track_key(uri)
     # while a scan runs, what it has gathered so far counts too
-    return bool(lib['keys'].get(key) or lib.get('scan', {}).get('keys', {}).get(key))
+    return any(keys.get(track_key(uri)) for keys in _indexes(_load_library()))
 
 
 def write_liked(value):
@@ -354,6 +354,7 @@ def _push_like(uri, want):
             elif uri not in keys.setdefault(key, []):
                 keys[key].append(uri)
         _save_library(lib)
+
 
 def recently_toggled(seconds=15):
     try:
