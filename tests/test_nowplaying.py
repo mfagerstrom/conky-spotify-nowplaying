@@ -385,7 +385,6 @@ class FetchLyricsTest(support.TempDirTest):
                       support.read(nowplaying.LOG))
 
     def test_the_cache_is_keyed_by_the_lookup_not_the_spotify_id(self):
-        self.fetch(get={'syncedLyrics': SYNCED})
         self.assertEqual(nowplaying.lyrics_cache_path(self.KEY),
                          nowplaying.lyrics_cache_path(('spotify:track:9',) + self.KEY[1:]))
         self.assertNotEqual(nowplaying.lyrics_cache_path(self.KEY),
@@ -445,7 +444,6 @@ class FetchLyricsTest(support.TempDirTest):
         self.assertEqual(sorted(os.listdir(nowplaying.LYRICS_CACHE)),
                          sorted(os.path.basename(nowplaying.lyrics_cache_path(k)) for k in keys
                                 if k[1] in kept))
-        self.assertEqual(len(kept), 3)
         self.assertEqual(kept, {'Song 0', 'Song 3', 'Song 4'})
 
 

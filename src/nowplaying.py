@@ -275,21 +275,12 @@ def read_cached_lyrics(key):
 def cache_lyrics(key, lyrics):
     """Saves a successful lookup, then prunes the least recently used entries past
     LYRICS_CACHE_MAX. A failure here costs only the cache, never the lyrics on screen."""
-    path = lyrics_cache_path(key)
-    # Two fetches of one key can overlap (a track skipped away from and back to while
-    # its first lookup runs), so each writes its own temporary file.
-    tmp = f'{path}.{threading.get_ident()}.tmp'
     try:
         os.makedirs(LYRICS_CACHE, exist_ok=True)
-        with open(tmp, 'w') as f:
-            json.dump({'fetched': time.time(), 'synced': lyrics.get('synced', [])}, f)
-        os.replace(tmp, path)
+        write_atomic(lyrics_cache_path(key),
+                     json.dumps({'fetched': time.time(), 'synced': lyrics.get('synced', [])}))
     except OSError as e:
         log(f'lyrics cache write failed: {type(e).__name__}: {e}')
-        try:
-            os.remove(tmp)                       # pruning only sees .json files
-        except OSError:
-            pass
         return
     try:
         names = [n for n in os.listdir(LYRICS_CACHE) if n.endswith('.json')]
@@ -392,9 +383,19 @@ SCALE = scale()
 
 
 def write_atomic(path, text):
-    with open(path + '.tmp', 'w') as f:
-        f.write(text)
-    os.replace(path + '.tmp', path)
+    # Threads can write one file at once (two fetches of a track's lyrics, or of its
+    # cover's colour), so each writes its own temporary file.
+    tmp = f'{path}.{threading.get_ident()}.tmp'
+    try:
+        with open(tmp, 'w') as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def font_ascent(font):
