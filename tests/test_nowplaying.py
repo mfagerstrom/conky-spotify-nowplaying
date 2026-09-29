@@ -447,5 +447,67 @@ class FetchLyricsTest(support.TempDirTest):
         self.assertEqual(kept, {'Song 0', 'Song 3', 'Song 4'})
 
 
+class StopLoop(Exception):
+    pass
+
+
+class LibraryLoopTest(support.TempDirTest):
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(nowplaying, LOG='nowplaying.log')
+        self.state = nowplaying.State()
+        patcher = mock.patch.object(nowplaying, 'state', self.state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_loop(self, steps, rate_limited=None, offset=None):
+        """Runs library_loop() for len(steps) turns, refresh_library() returning each step in
+        turn; returns the sleeps it asked for and the refresh mock."""
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == len(steps):
+                raise StopLoop
+
+        api = mock.Mock(TOKEN_FILE=__file__, refresh_library=mock.Mock(side_effect=steps),
+                        rate_limited_until=mock.Mock(side_effect=rate_limited or [None] * len(steps)),
+                        scan_offset=mock.Mock(return_value=offset))
+        with mock.patch.object(nowplaying, 'spotify_api', api), \
+                mock.patch.object(nowplaying.time, 'sleep', side_effect=sleep):
+            with self.assertRaises(StopLoop):
+                nowplaying.library_loop()
+        return sleeps, api.refresh_library
+
+    def log(self):
+        return support.read(nowplaying.LOG)
+
+    def test_a_scan_is_paced_page_by_page_then_settles_to_a_minute(self):
+        scanning = {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 50, 'keys': {}}}
+        done = {'scanned': time.time() + 60, 'total': 120, 'keys': {'a\tx': ['u']}}
+        idle = {'scanned': 1, 'total': 120, 'keys': {'a\tx': ['u']}}
+        self.state.liked_checked = 99.0
+        sleeps, _ = self.run_loop([scanning, done, idle])
+        page = nowplaying.LIBRARY_PAGE_SECONDS
+        self.assertEqual(sleeps, [page, 60, 60])
+        self.assertIn(f'library scan: 50 of 120 indexed, next page in {page} s', self.log())
+        self.assertEqual(self.log().count('library scan done: 120 songs, 1 titles'), 1)
+        self.assertEqual(self.state.liked_checked, 0)
+
+    def test_a_rate_limit_pauses_without_a_request_and_logs_once(self):
+        until = time.time() + 600
+        sleeps, refresh = self.run_loop([None, None], rate_limited=[until, until], offset=100)
+        refresh.assert_not_called()
+        self.assertEqual(sleeps, [60, 60])
+        self.assertEqual(self.log().count('library scan paused at offset 100 until '
+                                          + time.strftime('%T', time.localtime(until))), 1)
+
+    def test_a_failed_page_is_logged_and_retried_a_minute_later(self):
+        sleeps, _ = self.run_loop([OSError('offline')])
+        self.assertEqual(sleeps, [60])
+        self.assertIn('library refresh failed: OSError: offline', self.log())
+
+
 if __name__ == '__main__':
     unittest.main()

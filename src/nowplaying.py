@@ -71,6 +71,7 @@ WINDOW_BUTTON_PITCH = 22                      # centre to centre, and each one's
 HEART_PITCH = 25                              # heart centre to minimize centre
 HEART_WIDTH = 16                              # the heart draw.lua strokes, as wide as HEART_FONT's ♡
 LIKE_POLL_SECONDS = 30
+LIBRARY_PAGE_SECONDS = 15                     # between Liked Songs pages of a full scan
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
 NO_ART_WAIT = 3                               # s a track with a length waits for art before the placeholder
 
@@ -679,16 +680,38 @@ def write_lyrics(track_id, duration):
 
 def library_loop():
     """Keeps spotify_api's Liked Songs index fresh (full scan when missing / daily, newest
-    likes every minute), then re-checks the heart so it reflects likes made in the app."""
+    likes every minute), then re-checks the heart so it reflects likes made in the app.
+
+    A full scan fetches one 50-track page every LIBRARY_PAGE_SECONDS, so it stays far below
+    Spotify's rate limit alongside the heart checks; a 5,000-song library takes about 25
+    minutes. A 429 pauses it without sending anything until the backoff has passed."""
+    paused = False
     while True:
-        if os.path.exists(spotify_api.TOKEN_FILE) and not spotify_api.rate_limited_until():
+        scanning = False
+        until = spotify_api.rate_limited_until()
+        if until:
+            offset = spotify_api.scan_offset()
+            if offset is not None and not paused:
+                log(f'library scan paused at offset {offset} until '
+                    + time.strftime('%T', time.localtime(until)))
+            paused = offset is not None
+        elif os.path.exists(spotify_api.TOKEN_FILE):
+            paused = False
             try:
-                spotify_api.refresh_library()
-                with state.lock:
-                    state.liked_checked = 0
+                started = time.time()
+                lib = spotify_api.refresh_library()
+                scanning = 'scan' in lib
+                if scanning:
+                    log(f"library scan: {lib['scan']['offset']} of {lib['total']} indexed, "
+                        f"next page in {LIBRARY_PAGE_SECONDS} s")
+                else:
+                    if lib['scanned'] >= started:
+                        log(f"library scan done: {lib['total']} songs, {len(lib['keys'])} titles")
+                    with state.lock:
+                        state.liked_checked = 0
             except Exception as e:
                 log(f'library refresh failed: {type(e).__name__}: {e}')
-        time.sleep(60)
+        time.sleep(LIBRARY_PAGE_SECONDS if scanning else 60)
 
 
 def main():

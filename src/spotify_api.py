@@ -216,25 +216,48 @@ def _index_page(lib, items):
     return new
 
 
-def refresh_library(max_age=24 * 3600):
-    """Full rescan when the index is missing, stale, or the library shrank (unlikes made
-    elsewhere); otherwise just pick up the newest likes from the first page."""
+def _scan_page(lib, page):
+    """Indexes one page of a full scan and saves where it got to; the last page swaps the
+    scan's keys in, which drops songs unliked elsewhere since the previous scan."""
+    scan = lib['scan']
+    _index_page(scan, page['items'])
+    lib['total'] = page['total']
+    if page.get('next'):
+        scan['offset'] = page['offset'] + page['limit']
+    else:
+        lib['keys'] = scan['keys']
+        lib['scanned'] = time.time()
+        del lib['scan']
+    _save_library(lib)
+    return lib
+
+
+def scan_offset():
+    """Where the full scan in progress will resume, or None when none is running."""
     lib = _load_library()
+    return lib['scan']['offset'] if lib and 'scan' in lib else None
+
+
+def refresh_library(max_age=24 * 3600):
+    """Moves the Liked Songs index on by one request, so the caller sets the pace.
+
+    A full scan runs when the index is missing, stale, or the library shrank (unlikes made
+    elsewhere). It fetches one page per call and saves its offset and keys after each, so a
+    restart or a 429 resumes where it stopped. Otherwise the call just picks up the newest
+    likes from the first page. Returns the index; lib['scan'] is there while a scan runs."""
+    lib = _load_library()
+    if lib and 'scan' in lib:
+        page = api('GET', '/me/tracks', limit=50, offset=lib['scan']['offset'])
+        return _scan_page(lib, page)
     first = api('GET', '/me/tracks', limit=50)
     if lib and time.time() - lib['scanned'] < max_age and first['total'] >= lib['total']:
         _index_page(lib, first['items'])
         lib['total'] = first['total']
         _save_library(lib)
         return lib
-    lib = {'scanned': time.time(), 'total': first['total'], 'keys': {}}
-    page = first
-    while True:
-        _index_page(lib, page['items'])
-        if not page.get('next'):
-            break
-        page = api('GET', '/me/tracks', limit=50, offset=page['offset'] + page['limit'])
-    _save_library(lib)
-    return lib
+    lib = lib or {'scanned': 0, 'total': first['total'], 'keys': {}}
+    lib['scan'] = {'offset': 0, 'keys': {}}
+    return _scan_page(lib, first)
 
 
 def is_liked_any(uri):
@@ -242,7 +265,11 @@ def is_liked_any(uri):
     if is_liked(uri):
         return True
     lib = _load_library()
-    return bool(lib and lib['keys'].get(track_key(uri)))
+    if not lib:
+        return False
+    key = track_key(uri)
+    # while a scan runs, what it has gathered so far counts too
+    return bool(lib['keys'].get(key) or lib.get('scan', {}).get('keys', {}).get(key))
 
 
 def write_liked(value):
@@ -291,14 +318,17 @@ def toggle():
 def _push_like(uri, want):
     lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}
     key = track_key(uri)
+    # a scan in progress replaces lib['keys'] with its own when it ends, so it gets the change too
+    indexes = [lib['keys']] + ([lib['scan']['keys']] if 'scan' in lib else [])
     if want:
         api('PUT', '/me/library', uris=uri)
-        lib['keys'].setdefault(key, [])
-        if uri not in lib['keys'][key]:
-            lib['keys'][key].append(uri)
+        for keys in indexes:
+            keys.setdefault(key, [])
+            if uri not in keys[key]:
+                keys[key].append(uri)
     else:
         # unliking removes every saved release of the song, or the heart would stay on
-        uris = sorted(set(lib['keys'].pop(key, [])) | {uri})
+        uris = sorted({uri}.union(*(keys.pop(key, []) for keys in indexes)))
         api('DELETE', '/me/library', uris=','.join(uris))
     _save_library(lib)
 

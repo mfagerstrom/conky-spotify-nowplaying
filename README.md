@@ -79,6 +79,13 @@ No client secret is needed (PKCE). The refresh token is stored in
 
 The heart shows a song as liked when any release of it is saved (single, album version, ...),
 matching the Spotify app; unliking from the widget removes every saved release.
+To know which songs you have saved under another release, the widget keeps an index of your
+Liked Songs in `~/.cache/conky-spotify-nowplaying/library.json`. After you log in it reads
+the whole library slowly in the background, one page of 50 songs every 15 seconds (about 25
+minutes for 5,000 songs), and does the same again once a day. Until the index is complete,
+a song liked only as a different release may show as not liked. The index saves its place
+after every page, so quitting the widget or hitting a rate limit resumes the read rather
+than restarting it.
 
 Spotify's limits for new developer apps are low. If Spotify rate-limits the app, the widget
 stops calling the API until the block lifts (the heart shows the track as not liked, and clicking it
