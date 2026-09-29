@@ -1,5 +1,7 @@
-"""Tests for conky-mouse.py's placement (keeping the window on screen across monitors) and
-resizing (which edges a press drags, and the size settings a drag leads to)."""
+"""Tests for conky-mouse.py's placement (keeping the window on screen across monitors),
+resizing (which edges a press drags, and the size settings a drag leads to), and the wheel
+over plain lyrics."""
+import os
 import unittest
 from unittest import mock
 
@@ -135,6 +137,54 @@ class WithoutIdleEdgesTest(unittest.TestCase):
                 self.assertEqual(conky_mouse.without_idle_edges(edges, {'lyrics': False}), want)
                 self.assertEqual(conky_mouse.without_idle_edges(edges, {'lyrics': True}), edges)
                 self.assertEqual(conky_mouse.without_idle_edges(edges, {}), want)   # not written yet
+
+
+class ScrollLyricsTest(support.TempDirTest):
+    # Lyrics at x 22..545, y 160..223 (logical px), whose last offset is 5.
+    REGIONS = {'lyrics': [22, 160, 545, 223], 'lyrics_scroll': ['1234', 5]}
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(conky_mouse, LYRICS_SCROLL='lyrics-scroll')
+
+    def wheel(self, down, regions=REGIONS, x=100, y=180, s=1):
+        return conky_mouse.scroll_lyrics(regions, s, x, y, down)
+
+    def shown(self):
+        return support.read(conky_mouse.LYRICS_SCROLL)
+
+    def test_the_wheel_moves_a_line_at_a_time_from_the_top(self):
+        self.assertEqual([self.wheel(True), self.wheel(True), self.wheel(False)], [1, 2, 1])
+        self.assertEqual(self.shown(), '1234 1')
+
+    def test_it_stops_at_the_first_and_the_last_line(self):
+        self.assertEqual(self.wheel(False), 0)
+        for _ in range(8):
+            self.wheel(True)
+        self.assertEqual(self.shown(), '1234 5')
+
+    def test_an_offset_past_a_shrunken_range_steps_back_from_its_end(self):
+        with open(conky_mouse.LYRICS_SCROLL, 'w') as f:
+            f.write('1234 34')
+        self.assertEqual(self.wheel(False), 4)
+
+    def test_an_offset_for_other_lyrics_starts_from_the_top(self):
+        with open(conky_mouse.LYRICS_SCROLL, 'w') as f:
+            f.write('999 4')
+        self.assertEqual(self.wheel(True), 1)
+        self.assertEqual(self.shown(), '1234 1')
+
+    def test_outside_the_lyrics_or_over_synced_ones_it_does_nothing(self):
+        synced = dict(self.REGIONS, lyrics_scroll=None)
+        for regions, x, y in ((self.REGIONS, 100, 150), (self.REGIONS, 10, 180), (synced, 100, 180),
+                              ({'lyrics': None, 'lyrics_scroll': None}, 100, 180), ({}, 100, 180)):
+            with self.subTest(regions=regions, x=x, y=y):
+                self.assertIsNone(self.wheel(True, regions, x, y))
+        self.assertFalse(os.path.exists(conky_mouse.LYRICS_SCROLL))
+
+    def test_the_area_follows_the_display_scale(self):
+        self.assertIsNone(self.wheel(True, y=400))          # below the lyrics at scale 1
+        self.assertEqual(self.wheel(True, y=400, s=2), 1)
 
 
 if __name__ == '__main__':

@@ -221,7 +221,8 @@ class SizeSettingsTest(support.TempDirTest):
 
     def setUp(self):
         super().setUp()
-        self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt', LYRICS='lyrics.txt', LOG='nowplaying.log')
+        self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt', LYRICS='lyrics.txt', LOG='nowplaying.log',
+                      LYRICS_SCROLL='lyrics-scroll')
         self.redirect(nowplaying.spotify_api, LIKED_FILE='liked')
         self.redirect(nowplaying.size_file, PATH='size')
         state = nowplaying.State()
@@ -280,10 +281,32 @@ class SizeSettingsTest(support.TempDirTest):
         self.assertGreater(float(long['lyrics'][2]), float(short['lyrics'][2]))
 
     def test_lyrics_height_sets_the_lyrics_area(self):
-        _, short, _ = self.render((505, 40, 1.0))
-        _, tall, _ = self.render((505, 400, 1.0))
+        _, short, short_regions = self.render((505, 40, 1.0))
+        _, tall, tall_regions = self.render((505, 400, 1.0))
         self.assertEqual((short['lyrics'][5], tall['lyrics'][5]), ('40', '400'))
         self.assertEqual(short['lyrics'][2], tall['lyrics'][2])
+        top = float(short['lyrics'][2])
+        right = nowplaying.MARGIN + 505
+        self.assertEqual(short_regions['lyrics'], [nowplaying.ART_LEFT, top, right, top + 40])
+        self.assertEqual(tall_regions['lyrics'], [nowplaying.ART_LEFT, top, right, top + 400])
+
+    def test_synced_lyrics_get_no_wheel(self):
+        _, _, regions = self.render((505, 63, 1.0))
+        self.assertIsNone(regions['lyrics_scroll'])
+
+    def test_the_wheel_reaches_the_last_plain_line_at_the_bottom(self):
+        nowplaying.state.lyrics = {'plain': [f'line {i}' for i in range(10)]}
+        row = float(self.render((505, 63, 1.0))[1]['lyrics'][3])
+        for rows, want in ((3, 7), (3.5, 7), (10, 0), (12, 0)):
+            with self.subTest(rows=rows):
+                _, draw, regions = self.render((505, round(rows * row), 1.0))
+                self.assertEqual(regions['lyrics_scroll'], [draw['lyrics'][4], want])
+
+    def test_no_lyrics_means_no_lyrics_area(self):
+        nowplaying.state.lyrics = {}
+        _, draw, regions = self.render((505, 63, 1.0))
+        self.assertNotIn('lyrics', draw)
+        self.assertEqual((regions['lyrics'], regions['lyrics_scroll']), (None, None))
 
 
 class FilesTest(support.TempDirTest):
@@ -365,6 +388,33 @@ class FetchLyricsTest(support.TempDirTest):
         ])
         self.assertEqual(self.state.lyrics, {'synced': [(1.0, 'other edit')]})
 
+    def test_plain_lyrics_are_kept_when_nothing_synced_is_close(self):
+        self.fetch(get={'plainLyrics': '\n  First  \n\n\n\nSecond\nThird\n\n', 'syncedLyrics': None},
+                   search=[{'duration': 250, 'syncedLyrics': '[00:01.00]too far'},
+                           {'duration': 200, 'plainLyrics': 'another plain'}])
+        self.assertEqual(self.state.lyrics, {'plain': ['First', '', 'Second', 'Third']})
+        self.assertIn('lyrics: 4 plain lines for Artist - Song (200 s)', support.read(nowplaying.LOG))
+
+    def test_plain_lyrics_come_from_the_closest_search_hit_without_an_exact_match(self):
+        self.fetch(get=None, search=[{'duration': 215, 'plainLyrics': 'other edit'},
+                                     {'duration': 201, 'plainLyrics': 'nearest'},
+                                     {'duration': 200, 'plainLyrics': None, 'instrumental': True}])
+        self.assertEqual(self.state.lyrics, {'plain': ['nearest']})
+
+    def test_synced_lyrics_from_the_search_beat_plain_ones(self):
+        self.fetch(get={'plainLyrics': 'plain', 'syncedLyrics': None},
+                   search=[{'duration': 215, 'syncedLyrics': '[00:01.00]synced', 'plainLyrics': 'synced'}])
+        self.assertEqual(self.state.lyrics, {'synced': [(1.0, 'synced')]})
+
+    def test_synced_lyrics_without_a_timestamp_fall_back_to_plain_ones(self):
+        self.fetch(get={'syncedLyrics': 'First\nSecond', 'plainLyrics': 'First\nSecond'})
+        self.assertEqual(self.state.lyrics, {'plain': ['First', 'Second']})
+
+    def test_plain_lyrics_too_far_off_in_length_are_not_kept(self):
+        self.fetch(get=None, search=[{'duration': 250, 'plainLyrics': 'x'}])
+        self.assertEqual(self.state.lyrics, {})
+        self.assertIn('lyrics: none for Artist - Song (200 s)', support.read(nowplaying.LOG))
+
     def test_nothing_close_enough_means_no_lyrics(self):
         self.fetch(get=None, search=[{'duration': 250, 'syncedLyrics': '[00:01.00]x'}])
         self.assertEqual(self.state.lyrics, {})
@@ -420,6 +470,27 @@ class FetchLyricsTest(support.TempDirTest):
         self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 1)
         self.assertEqual(self.state.lyrics['synced'][0], (1.5, 'First'))
 
+    def test_plain_lyrics_are_cached_and_do_not_expire(self):
+        self.fetch(get={'plainLyrics': 'First\nSecond'})
+        self.age(self.KEY, 365 * 24 * 3600)
+        self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 0)
+        self.assertEqual(self.state.lyrics, {'plain': ['First', 'Second']})
+        self.assertIn('2 plain lines for Artist - Song (200 s), from the cache', support.read(nowplaying.LOG))
+
+    def test_no_lyrics_cached_before_plain_ones_were_kept_is_asked_again(self):
+        os.makedirs(nowplaying.LYRICS_CACHE)
+        nowplaying.write_atomic(nowplaying.lyrics_cache_path(self.KEY),
+                                json.dumps({'fetched': time.time(), 'synced': []}))
+        self.assertEqual(self.replay(get={'plainLyrics': 'First'}).call_count, 2)   # get, then search
+        self.assertEqual(self.state.lyrics, {'plain': ['First']})
+
+    def test_synced_lyrics_cached_before_plain_ones_were_kept_still_count(self):
+        os.makedirs(nowplaying.LYRICS_CACHE)
+        nowplaying.write_atomic(nowplaying.lyrics_cache_path(self.KEY),
+                                json.dumps({'fetched': 0, 'synced': [[1.5, 'First']]}))
+        self.assertEqual(self.replay().call_count, 0)
+        self.assertEqual(self.state.lyrics, {'synced': [(1.5, 'First')]})
+
     def test_no_lyrics_dated_in_the_future_counts_as_expired(self):
         self.fetch(get=None)
         self.age(self.KEY, -3600)
@@ -465,6 +536,60 @@ class FetchLyricsTest(support.TempDirTest):
                          sorted(os.path.basename(nowplaying.lyrics_cache_path(k)) for k in keys
                                 if k[1] in kept))
         self.assertEqual(kept, {'Song 0', 'Song 3', 'Song 4'})
+
+
+class WriteLyricsTest(support.TempDirTest):
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(nowplaying, LYRICS='lyrics.txt', LYRICS_SCROLL='lyrics-scroll')
+        self.state = nowplaying.State()
+        patcher = mock.patch.object(nowplaying, 'state', self.state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write(self, lyrics, track='track1'):
+        self.state.lyrics = lyrics
+        return nowplaying.write_lyrics(track)
+
+    def scrolled(self):
+        nowplaying.write_atomic(nowplaying.LYRICS_SCROLL, 'x 3')
+
+    def test_synced_lyrics_are_timed_and_follow_playback(self):
+        version, count, static = self.write({'synced': [(1.5, 'First'), (4.0, '')]})
+        self.assertEqual(support.read(nowplaying.LYRICS), 'synced\n0.00\t♫\n1.50\tFirst\n4.00\t♫\n')
+        self.assertEqual((count, static), (3, False))
+
+    def test_plain_lyrics_are_untimed_and_static(self):
+        version, count, static = self.write({'plain': ['First', '', 'Second']})
+        self.assertEqual(support.read(nowplaying.LYRICS), 'plain\n\tFirst\n\t\n\tSecond\n')
+        self.assertEqual((count, static), (3, True))
+
+    def test_no_lyrics_writes_nothing(self):
+        for lyrics in (None, {}, {'synced': []}, {'plain': []}):
+            with self.subTest(lyrics=lyrics):
+                self.assertIsNone(self.write(lyrics))
+        self.assertFalse(os.path.exists(nowplaying.LYRICS))
+
+    def test_new_lyrics_start_at_the_top(self):
+        first = self.write({'plain': ['a', 'b']})
+        self.scrolled()
+        self.assertEqual(self.write({'plain': ['a', 'b']}), first)       # the same: left alone
+        self.assertTrue(os.path.exists(nowplaying.LYRICS_SCROLL))
+        self.write({'plain': ['c']}, track='track2')
+        self.assertFalse(os.path.exists(nowplaying.LYRICS_SCROLL))
+
+    def test_the_same_lyrics_after_a_track_without_any_start_at_the_top(self):
+        first = self.write({'plain': ['a', 'b']})
+        self.scrolled()
+        self.write({}, track='track2')
+        self.assertEqual(self.write({'plain': ['a', 'b']}), first)
+        self.assertFalse(os.path.exists(nowplaying.LYRICS_SCROLL))
+
+    def test_plain_and_synced_lyrics_of_one_length_differ_in_version(self):
+        plain = self.write({'plain': ['a', 'b']})
+        synced = self.write({'synced': [(0.0, 'a'), (1.0, 'b')]})
+        self.assertNotEqual(plain[0], synced[0])
 
 
 class StopLoop(Exception):
