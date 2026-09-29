@@ -2,10 +2,11 @@
 """Top-bar (AppIndicator) icon for the widget: shows the current track, sets the text
 scaling, toggles always-on-top and start-at-login, minimizes and restores the widget, and
 quits it. Started by the launcher's supervisor."""
-import os, signal, subprocess, sys
+import ctypes, os, signal, subprocess, sys
 
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 try:
     gi.require_version('AyatanaAppIndicator3', '0.1')
     from gi.repository import AyatanaAppIndicator3 as AppIndicator
@@ -13,7 +14,7 @@ except (ValueError, ImportError):
     print('tray: AyatanaAppIndicator3 not available (install gir1.2-ayatanaappindicator3-0.1)',
           file=sys.stderr)
     sys.exit(78)   # tells the supervisor not to keep restarting us
-from gi.repository import GLib, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
 import widget_size
 
@@ -50,9 +51,44 @@ def now_playing():
     return out or 'Spotify not playing'
 
 
+class Indicator(AppIndicator.Indicator):
+    """The library's indicator, minus its GtkStatusIcon fallback off X11 (see no_fallback)."""
+
+
+def no_fallback():
+    """When the panel's StatusNotifierWatcher is missing or slow at start, the library falls
+    back to a GtkStatusIcon until it answers. Off X11 that icon has no tray to live in: it
+    shows nothing and GTK logs a gtk_widget_get_scale_factor critical for it. Clear the
+    class's fallback hook, which the library skips when unset; the item still registers
+    once the watcher answers. The hook is AppIndicatorClass's 26th pointer: GObjectClass
+    is 17 pointer-sized fields, then eight signal slots come before it, and seven more
+    slots follow. A class of any other size is left alone rather than written blind."""
+    class TypeQuery(ctypes.Structure):
+        _fields_ = [('type', ctypes.c_size_t), ('type_name', ctypes.c_char_p),
+                    ('class_size', ctypes.c_uint), ('instance_size', ctypes.c_uint)]
+
+    gobject = ctypes.CDLL('libgobject-2.0.so.0')
+    gobject.g_type_from_name.restype = ctypes.c_size_t
+    gobject.g_type_from_name.argtypes = [ctypes.c_char_p]
+    gobject.g_type_query.argtypes = [ctypes.c_size_t, ctypes.POINTER(TypeQuery)]
+    gobject.g_type_class_ref.restype = ctypes.c_void_p
+    gobject.g_type_class_ref.argtypes = [ctypes.c_size_t]
+    gtype = gobject.g_type_from_name(Indicator.__gtype__.name.encode())
+    query = TypeQuery()
+    gobject.g_type_query(gtype, ctypes.byref(query))
+    pointer = ctypes.sizeof(ctypes.c_void_p)
+    if query.class_size != 33 * pointer:
+        print(f'tray: unexpected AppIndicator class size {query.class_size}; keeping its fallback',
+              file=sys.stderr)
+        return
+    klass = gobject.g_type_class_ref(gtype)
+    ctypes.c_void_p.from_address(klass + 25 * pointer).value = None
+
+
 def main():
-    indicator = AppIndicator.Indicator.new(NAME, f'{NAME}-symbolic',
-                                           AppIndicator.IndicatorCategory.APPLICATION_STATUS)
+    if not Gdk.Display.get_default().__gtype__.name.startswith('GdkX11'):
+        no_fallback()
+    indicator = Indicator(id=NAME, icon_name=f'{NAME}-symbolic', category='ApplicationStatus')
     # Running from a checkout the icon isn't installed; point at the repo's copy.
     repo_icons = os.path.join(HERE, '..', 'packaging', 'icons')
     if os.path.isdir(repo_icons):
