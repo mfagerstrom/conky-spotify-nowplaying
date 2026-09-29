@@ -205,18 +205,11 @@ def ledgers(calls):
 
 
 def open_rows(paths):
-    """(pull request numbers, Launchpad versions) still open in the session's ledgers."""
-    prs, builds = set(), set()
-    for path in paths:
-        for row in catchup.read_ledger(path):
-            if row['state'] == 'done':
-                continue
-            key = row['key']
-            if catchup.is_pr(key):
-                prs.add(key[len(catchup.PR_PREFIX):])
-            elif catchup.is_lp(key):
-                builds.add(key[len(catchup.LP_PREFIX):])
-    return prs, builds
+    """(pull request numbers, Launchpad versions, blocking issue numbers) still open in the
+    session's ledgers."""
+    keys = set().union(*(catchup.open_rows(path) for path in paths))
+    return tuple({key.split(':', 1)[1] for key in keys if kind(key)}
+                 for kind in (catchup.is_pr, catchup.is_lp, catchup.is_issue))
 
 
 def reports(calls, by_id, notices, start):
@@ -320,7 +313,7 @@ def current_group(calls):
 
 def expected(calls, by_id, notices, start, ledger_open):
     """(what happened, allowed group names), or None when the turn calls for no group."""
-    prs_open, builds_open = ledger_open
+    prs_open, builds_open, issues_open = ledger_open
     events = milestones(calls, start)
     said = reports(calls, by_id, notices, start)
     shut = [(pos, m.group(1)) for pos, text in said for m in PR_SHUT.finditer(text)]
@@ -334,6 +327,9 @@ def expected(calls, by_id, notices, start, ledger_open):
             events.append((pos, 'no Launchpad build is open any more', groups))
     if events:
         _, what, groups = max(events, key=lambda e: e[0])
+        # Any row still out in the ledger is work the session holds, so it is not done.
+        if builds_open or issues_open:
+            groups = tuple(g for g in groups if g != COMPLETED)
         if builds_open and TESTS_RUNNING not in groups:
             groups += (TESTS_RUNNING,)
         return what, groups

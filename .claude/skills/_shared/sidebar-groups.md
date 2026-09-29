@@ -145,8 +145,9 @@ a milestone only when its command's output shows it ran:
 | `pr: <n> merged` or `closed` from `wait`                   | `Completed` or `Working`                |
 
 With another pull request still open in the ledger, a close or a settled
-build calls for `Working` or `Needs Review` instead of `Completed`, and a
-Launchpad build still open adds `Tests Running`. A turn with no milestone
+build calls for `Working` or `Needs Review` instead of `Completed`. A
+Launchpad build or blocking issue still open in the ledger rules out
+`Completed`, and an open build adds `Tests Running`. A turn with no milestone
 that ends with a build open in the ledger calls for `Tests Running`, and one
 with a pull request open calls for `Needs Review`. A turn that ends under
 `Self Review` stopped inside the loop, which only ends a turn on a question,

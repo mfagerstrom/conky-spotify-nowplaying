@@ -252,6 +252,20 @@ class Launchpad(Scenario):
         self.assertIsNone(self.run_stop('pr-merged-notice.jsonl',
                                         *move('cg-0000-tests-running')))
 
+    def test_completed_while_a_build_is_open_blocks(self):
+        self.ledger(MERGED_PR + OPEN_LP)
+        self.output('b1.output', WAIT_MERGED)
+        decision = self.run_stop('pr-merged-notice.jsonl', *move('cg-0000-completed'))
+        self.assertBlocks(decision, 'Working', 'Tests Running')
+        self.assertNotIn('`Completed`', decision['reason'].split('Move to')[1])
+
+    def test_completed_while_a_blocker_is_open_blocks(self):
+        self.ledger(MERGED_PR + BLOCKER)
+        self.output('b1.output', WAIT_MERGED)
+        decision = self.run_stop('pr-merged-notice.jsonl', *move('cg-0000-completed'))
+        self.assertBlocks(decision, 'Working')
+        self.assertIsNone(self.run_stop('pr-merged-notice.jsonl', *move('cg-0000-working')))
+
 
 class IdleTurns(Scenario):
     def test_a_later_prompt_hides_earlier_milestones(self):
