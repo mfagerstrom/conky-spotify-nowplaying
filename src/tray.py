@@ -131,6 +131,8 @@ def main():
         track.set_label(now_playing())
         visibility.set_label(visibility_label())
         sync_sizes()                            # resized by dragging meanwhile
+        if always_on_top.get_active() != on_top():
+            always_on_top.set_active(on_top())  # changed outside the menu; writes the same back
         if autostart.get_active() != os.path.exists(AUTOSTART):
             autostart.set_active(os.path.exists(AUTOSTART))   # changed from the app menu/terminal
         return True

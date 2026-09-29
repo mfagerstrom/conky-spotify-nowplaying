@@ -43,6 +43,7 @@ def load():
 
 def save(settings):
     os.makedirs(os.path.dirname(PATH), exist_ok=True)
-    with open(PATH + '.tmp', 'w') as f:
+    tmp = f'{PATH}.{os.getpid()}.tmp'              # the tray and conky-mouse.py both write it
+    with open(tmp, 'w') as f:
         f.write('{} {} {:g}\n'.format(*settings))
-    os.replace(PATH + '.tmp', PATH)
+    os.replace(tmp, PATH)

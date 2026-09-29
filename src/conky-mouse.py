@@ -331,7 +331,12 @@ def resize(d, root, win, edges, s, regions):
     old = new = widget_size.load()
     start = wx, wy, w, h = geometry(d, win)
     mon = monitor_for(wx, wy, w, h)
-    room_x, room_y = (max(mon[2] - w, 0), max(mon[3] - h, 0)) if mon else (math.inf, math.inf)
+    if mon:                                     # the room on the dragged side, to the monitor's edge
+        mx, my, mw, mh = mon
+        room_x = max(wx - mx if 'l' in edges else mx + mw - wx - w, 0)
+        room_y = max(wy - my if 't' in edges else my + mh - wy - h, 0)
+    else:
+        room_x = room_y = math.inf
     px, py, mask = pointer(d, root)
     log(f'resize start: {edges} at {old}, window {wx},{wy} {w}x{h}')
     frame = outline(d, root)
@@ -409,9 +414,15 @@ def set_above(d, root, win, above):
     x11.XFlush(d)
 
 
-def load_regions():
+def load_regions(cache={}):
+    """regions.json, read again only when nowplaying.py has rewritten it: pointer motion
+    along the border asks for it many times a second."""
     try:
-        return json.load(open(REGIONS))
+        mtime = os.stat(REGIONS).st_mtime_ns
+        if cache.get('mtime') != mtime:
+            with open(REGIONS) as f:
+                cache.update(mtime=mtime, regions=json.load(f))
+        return cache['regions']
     except (OSError, ValueError):
         return {}
 
@@ -457,20 +468,23 @@ def main():
     win, last_check, hidden = None, 0.0, None   # None: not known, e.g. after a restart
     cursor = None                                # the edges whose cursor win shows; None: not set
     above, last_on_top = None, 0.0               # the always-on-top state win has; None: not set
+    logged_on_top = None
     s = scale()                                  # refreshed on each click; motion uses the last
     ev = XEvent()
     while True:
         now = time.monotonic()
         # Conky rebuilds its window on reloads, often under the same id, which silently drops
-        # our selection and resets its position -- so re-select and re-place every second.
+        # our selection, its position and its always-on-top state -- so re-select, re-place and
+        # re-apply every second.
         if now - last_check > 1:
             last_check = now
             current = conky_window()
             if current:
                 if current != win:
                     log(f'attached to 0x{current:x}')
-                    cursor = above = None
+                    cursor = None
                 win = current
+                above = None                           # sent again below; a no-op if it held
                 x11.XSelectInput(d, win, BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK)
                 saved = load_position()
                 if saved:
@@ -496,7 +510,9 @@ def main():
             if want != above:
                 set_above(d, root, win, want)
                 above = want
-                log(f'always on top: {want}')
+                if want != logged_on_top:
+                    log(f'always on top: {want}')
+                    logged_on_top = want
         while x11.XPending(d):
             x11.XNextEvent(d, ctypes.byref(ev))
             b = ev.xbutton

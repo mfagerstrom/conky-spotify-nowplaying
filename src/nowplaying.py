@@ -68,6 +68,7 @@ HEART_PITCH = 25                              # heart centre to minimize centre
 HEART_WIDTH = 16                              # the heart draw.lua strokes, as wide as HEART_FONT's ♡
 LIKE_POLL_SECONDS = 30
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
+NO_ART_WAIT = 3                               # s a track with a length waits for art before the placeholder
 
 _pango = PangoCairo.FontMap.get_default().create_context()
 PangoCairo.context_set_resolution(_pango, 96)
@@ -424,7 +425,12 @@ def last_gap(y, bottom):
 
 
 def message(text):
-    """A line of text where the track would be, the widget keeping its size and margins."""
+    """A line of text where the track would be, the widget keeping its size and margins.
+    draw.txt keeps only the scale and the window buttons, so nothing of the last track is
+    drawn over it."""
+    heart_cx, min_cx, close_cx, top_cy, _ = top_buttons(widget_width, header_scale)
+    write_atomic(DRAW, f'scale {SCALE} {text_scale:g} {header_scale:g}\n'
+                       f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}\n')
     return '\n'.join((first_line(MARGIN),
                       f"${{goto {MARGIN}}}${{color}}${{font {conky_font(MESSAGE_FONT)}}}{esc(text)}{plain()}",
                       last_gap(MARGIN + line_height(MESSAGE_FONT, PLAIN_FONT), 2 * MARGIN + MIN_HEIGHT)))
@@ -440,7 +446,6 @@ def render():
     window_line = f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}'
     if status not in ('Playing', 'Paused'):
         write_regions(top_regions)
-        write_atomic(DRAW, f'{scale_line}\n{window_line}\n')
         return message('Spotify not playing')
 
     meta = playerctl('metadata', '--format',
@@ -469,8 +474,9 @@ def render():
         if settled and state.lyrics_key != lyrics_key:
             state.lyrics_key, state.lyrics = lyrics_key, None
             fetch_lyrics_now = True
-        # The DJ's clips have no length either, so this waits on the settle time alone.
-        no_art = not art and now - state.track_since >= METADATA_SETTLE
+        # Spotify's DJ talks in clips with no length, which get it at once; a song whose
+        # art is only late waits a while longer.
+        no_art = not art and now - state.track_since >= (NO_ART_WAIT if duration else METADATA_SETTLE)
         if no_art:
             art = NO_ART_URL
         if (settled or no_art) and art and art != state.cover_url:
@@ -620,7 +626,11 @@ def main():
         try:
             text = render()
         except Exception as e:
-            text = message(f'widget error: {str(e)[:60]}')
+            try:
+                text = message(f'widget error: {str(e)[:60]}')
+            except Exception:                   # the layout itself is what failed
+                text = f"${{color}}${{font Ubuntu Sans:size=11}}widget error: {esc(str(e))[:60]}\n"
+
         with open(OUT + '.tmp', 'w') as f:
             f.write(text)
         os.replace(OUT + '.tmp', OUT)
