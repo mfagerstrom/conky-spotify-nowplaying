@@ -424,13 +424,19 @@ def last_gap(y, bottom):
     return gap(bottom - y, after_text=False)
 
 
+def draw_basics():
+    """draw.txt's lines for every screen: the scales (display; lyrics' text; the header's
+    and times' text) and the window buttons."""
+    _, min_cx, close_cx, top_cy, _ = top_buttons(widget_width, header_scale)
+    return [f'scale {SCALE} {text_scale:g} {header_scale:g}',
+            f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}']
+
+
 def message(text):
     """A line of text where the track would be, the widget keeping its size and margins.
     draw.txt keeps only the scale and the window buttons, so nothing of the last track is
     drawn over it."""
-    heart_cx, min_cx, close_cx, top_cy, _ = top_buttons(widget_width, header_scale)
-    write_atomic(DRAW, f'scale {SCALE} {text_scale:g} {header_scale:g}\n'
-                       f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}\n')
+    write_atomic(DRAW, '\n'.join(draw_basics()) + '\n')
     return '\n'.join((first_line(MARGIN),
                       f"${{goto {MARGIN}}}${{color}}${{font {conky_font(MESSAGE_FONT)}}}{esc(text)}{plain()}",
                       last_gap(MARGIN + line_height(MESSAGE_FONT, PLAIN_FONT), 2 * MARGIN + MIN_HEIGHT)))
@@ -440,10 +446,8 @@ def render():
     global widget_width, lyrics_height, text_scale, header_scale
     widget_width, lyrics_height, text_scale = size_file.load()
     header_scale = header_scale_for(text_scale)
-    scale_line = f'scale {SCALE} {text_scale:g} {header_scale:g}'   # display; lyrics' text; times' text
     status = playerctl('status')
-    heart_cx, min_cx, close_cx, top_cy, top_regions = top_buttons(widget_width, header_scale)
-    window_line = f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}'
+    heart_cx, min_cx, _, top_cy, top_regions = top_buttons(widget_width, header_scale)
     if status not in ('Playing', 'Paused'):
         write_regions(top_regions)
         return message('Spotify not playing')
@@ -556,12 +560,11 @@ def render():
     fraction = min(max(position / duration, 0), 1) if duration else 0
     y += row
 
-    draw = [scale_line,
+    draw = [*draw_basics(),
             f'bar {bar_x0} {bar_x1} {mid_y + BAR_DROP} {fraction:.4f} {duration:.3f}',
             f'controls {prev_cx} {play_cx} {next_cx} {mid_y} {SKIP_SIZE} {PLAY_SIZE} {int(status == "Playing")}',
             f'times {time_x} {MARGIN + widget_width} {mid_y + BAR_DROP}',
             f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}',
-            window_line,
             f'heart {heart_cx} {top_cy} {HEART_WIDTH} {heart_state} ' + ' '.join(map(str, heart_box)),
             f'label {COLUMN_X} {ART_TOP}']
     if lyr_version:

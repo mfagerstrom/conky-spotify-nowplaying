@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Top-bar (AppIndicator) icon for the widget: shows the current track, sets the widget's
-text scaling, toggles always-on-top and start-at-login, minimizes and restores the widget, and quits it. Started by the
-launcher's supervisor."""
+"""Top-bar (AppIndicator) icon for the widget: shows the current track, sets the text
+scaling, toggles always-on-top and start-at-login, minimizes and restores the widget, and
+quits it. Started by the launcher's supervisor."""
 import os, signal, subprocess, sys
 
 import gi
