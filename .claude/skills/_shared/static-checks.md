@@ -66,8 +66,12 @@ the `run` skill, or built and installed, as in `/release` step 4. Either way
 the widget's log is read afterwards:
 
 ```bash
-grep -iE 'error|traceback|lua' ~/.cache/conky-spotify-nowplaying/run.log
+grep -iE 'error|critical|traceback|lua' ~/.cache/conky-spotify-nowplaying/run.log
 ```
+
+`critical` is there for GLib's `Gtk-CRITICAL` lines, which name no error.
+The only line expected in the log besides conky's startup chatter is the
+`libayatana-appindicator is deprecated` warning.
 
 The pull request's test plan says which run was done. A change to
 documentation, skills or `scripts/` alone owes no run.

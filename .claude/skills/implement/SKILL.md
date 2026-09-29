@@ -148,7 +148,7 @@ bin/conky-spotify-nowplaying stop
 : > ~/.cache/conky-spotify-nowplaying/run.log
 bin/conky-spotify-nowplaying start
 pgrep -af 'conky-spotify-nowplaying|nowplaying.py|conky-mouse.py|^conky '
-grep -iE 'error|traceback|lua' ~/.cache/conky-spotify-nowplaying/run.log
+grep -iE 'error|critical|traceback|lua' ~/.cache/conky-spotify-nowplaying/run.log
 ```
 
 The processes should run from this worktree's `src/`, and the log should hold

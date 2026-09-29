@@ -105,7 +105,7 @@ Then restart and verify:
 conky-spotify-nowplaying restart
 pgrep -af 'conky-spotify-nowplaying|share/conky-spotify|^conky '
 xwininfo -root -tree | grep ConkySpotifyNowPlaying
-grep -iE 'error|traceback|lua' ~/.cache/conky-spotify-nowplaying/run.log
+grep -iE 'error|critical|traceback|lua' ~/.cache/conky-spotify-nowplaying/run.log
 gdbus call --session --dest org.kde.StatusNotifierWatcher \
   --object-path /StatusNotifierWatcher \
   --method org.freedesktop.DBus.Properties.Get \
