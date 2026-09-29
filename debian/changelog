@@ -1,3 +1,17 @@
+conky-spotify-nowplaying (1.2.0) resolute; urgency=medium
+
+  * Resize the widget by dragging an edge or corner: the sides set its
+    width, the top or bottom edge the height of the lyrics. Reset widget
+    size in the top-bar menu puts it back.
+  * Text scaling submenu in the top-bar menu sizes the text on its own.
+  * Always on top toggle in the top-bar menu.
+  * The widget starts at its saved position.
+  * Lyrics show as many lines as fit and fade at the edges; instrumental
+    lines show a musical note.
+  * A placeholder cover while Spotify's DJ is talking.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Tue, 29 Sep 2026 09:47:15 -0400
+
 conky-spotify-nowplaying (1.1.0) resolute; urgency=medium
 
   * Minimize and close buttons next to the heart; the top-bar menu and
