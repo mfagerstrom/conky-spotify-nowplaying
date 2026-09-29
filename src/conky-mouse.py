@@ -478,7 +478,7 @@ def scroll_lyrics(regions, s, x, y, down):
         offset = int(offset) if shown == version else 0     # other lyrics: from the top
     except (OSError, ValueError):
         offset = 0
-    offset = min(max(offset + (1 if down else -1), 0), last)
+    offset = min(max(min(offset, last) + (1 if down else -1), 0), last)   # last shrinks when the area grows
     with open(LYRICS_SCROLL + '.tmp', 'w') as f:
         f.write(f'{version} {offset}')
     os.replace(LYRICS_SCROLL + '.tmp', LYRICS_SCROLL)

@@ -163,6 +163,11 @@ class ScrollLyricsTest(support.TempDirTest):
             self.wheel(True)
         self.assertEqual(self.shown(), '1234 5')
 
+    def test_an_offset_past_a_shrunken_range_steps_back_from_its_end(self):
+        with open(conky_mouse.LYRICS_SCROLL, 'w') as f:
+            f.write('1234 34')
+        self.assertEqual(self.wheel(False), 4)
+
     def test_an_offset_for_other_lyrics_starts_from_the_top(self):
         with open(conky_mouse.LYRICS_SCROLL, 'w') as f:
             f.write('999 4')

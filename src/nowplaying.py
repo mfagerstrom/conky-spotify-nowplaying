@@ -374,15 +374,15 @@ def fetch_lyrics(key):
             if state.lyrics_key == key:
                 state.lyrics_retry = time.time() + 30
         return
-    lyrics = {}
-    if record and record.get('syncedLyrics'):
-        synced = []
-        for line in record['syncedLyrics'].splitlines():
-            m = re.match(r'\[(\d+):(\d+(?:\.\d+)?)\](.*)', line)
-            if m:
-                synced.append((int(m[1]) * 60 + float(m[2]), m[3].strip()))
+    lyrics, record = {}, record or {}
+    synced = []
+    for line in (record.get('syncedLyrics') or '').splitlines():
+        m = re.match(r'\[(\d+):(\d+(?:\.\d+)?)\](.*)', line)
+        if m:
+            synced.append((int(m[1]) * 60 + float(m[2]), m[3].strip()))
+    if synced:
         lyrics['synced'] = synced
-    elif record and record.get('plainLyrics'):
+    elif record.get('plainLyrics'):                  # also when no synced line had a timestamp
         lyrics['plain'] = plain_lines(record['plainLyrics'])
     log(f'lyrics: {lyrics_summary(lyrics)} for {artist} - {title} ({duration:.0f} s)')
     cache_lyrics(key, lyrics)

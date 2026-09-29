@@ -406,6 +406,10 @@ class FetchLyricsTest(support.TempDirTest):
                    search=[{'duration': 215, 'syncedLyrics': '[00:01.00]synced', 'plainLyrics': 'synced'}])
         self.assertEqual(self.state.lyrics, {'synced': [(1.0, 'synced')]})
 
+    def test_synced_lyrics_without_a_timestamp_fall_back_to_plain_ones(self):
+        self.fetch(get={'syncedLyrics': 'First\nSecond', 'plainLyrics': 'First\nSecond'})
+        self.assertEqual(self.state.lyrics, {'plain': ['First', 'Second']})
+
     def test_plain_lyrics_too_far_off_in_length_are_not_kept(self):
         self.fetch(get=None, search=[{'duration': 250, 'plainLyrics': 'x'}])
         self.assertEqual(self.state.lyrics, {})
