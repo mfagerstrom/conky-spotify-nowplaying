@@ -51,6 +51,7 @@ BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK = 1 << 2, 1 << 3, 1 
 CLIENT_MESSAGE, SUBSTRUCTURE_NOTIFY_MASK, SUBSTRUCTURE_REDIRECT_MASK = 33, 1 << 19, 1 << 20
 CW_BACK_PIXMAP, CW_BACK_PIXEL, CW_BORDER_PIXEL = 1 << 0, 1 << 1, 1 << 3
 CW_OVERRIDE_REDIRECT, CW_COLORMAP = 1 << 9, 1 << 13
+US_POSITION, P_POSITION = 1 << 0, 1 << 2          # XSizeHints flags
 COVER_HOLD = 0.1                                  # s: conky draws every 0.05 s
 OUTLINE, OUTLINE_WIDTH = 0x1db954, 2              # conky.conf's color1; logical px
 EDGE = 6                                          # logical px along the border that resize
@@ -93,6 +94,8 @@ x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
 x11.XInternAtom.restype = ctypes.c_ulong
 x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
 x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.c_void_p]
+x11.XGetWMNormalHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p]
+x11.XSetWMNormalHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p]
 # Windows vanish when conky restarts; don't let the resulting X errors kill the helper.
 ERROR_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(lambda d, e: 0)
 x11.XSetErrorHandler(ERROR_HANDLER)
@@ -133,6 +136,13 @@ class XSetWindowAttributes(ctypes.Structure):
                 ('event_mask', ctypes.c_long), ('do_not_propagate_mask', ctypes.c_long),
                 ('override_redirect', ctypes.c_int), ('colormap', ctypes.c_ulong),
                 ('cursor', ctypes.c_ulong)]
+
+
+class XSizeHints(ctypes.Structure):
+    _fields_ = [('flags', ctypes.c_long)] + [(n, ctypes.c_int) for n in (
+        'x', 'y', 'width', 'height', 'min_width', 'min_height', 'max_width', 'max_height',
+        'width_inc', 'height_inc', 'min_aspect_x', 'min_aspect_y', 'max_aspect_x', 'max_aspect_y',
+        'base_width', 'base_height', 'win_gravity')]
 
 
 class XEvent(ctypes.Union):
@@ -405,6 +415,19 @@ def load_on_top():
         return True
 
 
+def hint_position(d, win, x, y):
+    """Mark (x, y) as the window's own position in WM_NORMAL_HINTS, keeping any size hints
+    already there. Unmapping withdraws the window, and on the next map the window manager
+    places it anew (mutter: the middle of some monitor) unless the hints carry a
+    position; without them the widget would show there until moved back."""
+    hints, supplied = XSizeHints(), ctypes.c_long()
+    if not x11.XGetWMNormalHints(d, win, ctypes.byref(hints), ctypes.byref(supplied)):
+        hints = XSizeHints()
+    hints.flags |= US_POSITION | P_POSITION
+    hints.x, hints.y = x, y
+    x11.XSetWMNormalHints(d, win, ctypes.byref(hints))
+
+
 def set_above(d, root, win, above):
     """Ask the window manager to keep the window above others, or not (EWMH _NET_WM_STATE)."""
     ev = XClientMessageEvent(type=CLIENT_MESSAGE, window=win, format=32,
@@ -487,16 +510,16 @@ def main():
                 above = None                           # sent again below; a no-op if it held
                 x11.XSelectInput(d, win, BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK)
                 saved = load_position()
-                if saved:
-                    x, y, w, h = geometry(d, win)
-                    target = clamp_to_monitor(*saved, w, h)
-                    if (x, y) != target:
-                        x11.XMoveWindow(d, win, *target)
+                x, y, w, h = geometry(d, win)
+                target = clamp_to_monitor(*saved, w, h) if saved else (x, y)
+                if (x, y) != target:
+                    x11.XMoveWindow(d, win, *target)
                 # Unmapped again every second while hidden, since a conky reload maps it.
                 hide = os.path.exists(HIDDEN)
                 if hide:
                     x11.XUnmapWindow(d, win)
                 elif hidden is not False:              # a no-op when already mapped
+                    hint_position(d, win, *target)
                     x11.XMapWindow(d, win)
                     above = None                       # the window manager forgets it when unmapped
                     if hidden:
