@@ -172,7 +172,7 @@ class WindowButtonsTest(support.TempDirTest):
         # the close icon is drawn inside the text area; only its hit area reaches the border
         window = next(line for line in draw.splitlines() if line.startswith('window '))
         _, _, close_cx, _, size = window.split()
-        self.assertLessEqual(float(close_cx) + float(size) / 2, nowplaying.MARGIN + nowplaying.TEXT_WIDTH)
+        self.assertLessEqual(float(close_cx) + float(size) / 2, nowplaying.MARGIN + nowplaying.widget_width)
         # the heart is drawn by draw.lua, with its hover box matching its click region
         self.assertNotIn('♡', text)
         heart = next(line for line in draw.splitlines() if line.startswith('heart '))
@@ -193,6 +193,69 @@ class WindowButtonsTest(support.TempDirTest):
         self.assertEqual(sorted(regions), ['close', 'minimize'])
         self.assertIn('\nwindow ', draw)
         self.assertNotIn('bar ', draw)
+
+
+class SizeSettingsTest(support.TempDirTest):
+    """The size settings change the width and the lyrics' height; the text scale changes
+    only the text, never where the controls sit or how big the widget is."""
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt', LYRICS='lyrics.txt', LOG='nowplaying.log')
+        self.redirect(nowplaying.spotify_api, LIKED_FILE='liked')
+        self.redirect(nowplaying.size_file, PATH='size')
+        state = nowplaying.State()
+        state.track, state.lyrics = 'track1', {'synced': [(1.0, 'a line'), (2.0, '')]}
+        state.lyrics_key = ('track1', 'Title', 'Artist', 'Album', 200)   # fetched already
+        patcher = mock.patch.object(nowplaying, 'state', state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def render(self, settings):
+        nowplaying.size_file.save(settings)
+        answers = {'status': 'Playing',
+                   'metadata': 'track1\tTitle\tArtist\tAlbum\t\t10000000\t200000000'}
+        with mock.patch.object(nowplaying, 'playerctl', side_effect=lambda cmd, *_: answers[cmd]), \
+                mock.patch.object(nowplaying.threading, 'Thread'), \
+                mock.patch.object(nowplaying.spotify_api, 'write_liked'):
+            text = nowplaying.render()
+        draw = {line.split()[0]: line.split()[1:] for line in support.read(nowplaying.DRAW).splitlines()}
+        with open(nowplaying.REGIONS) as f:
+            return text, draw, json.load(f)
+
+    def test_the_width_goto_follows_the_width_setting_only(self):
+        for settings, want in (((505, 63, 1.0), 545), ((620, 63, 1.0), 660), ((620, 200, 1.7), 660)):
+            with self.subTest(settings=settings):
+                text, _, _ = self.render(settings)
+                self.assertIn(f'${{goto {want}}}', text.splitlines()[0])
+
+    def test_text_scale_leaves_the_layout_in_place(self):
+        _, draw, regions = self.render((505, 105, 1.0))
+        for scale in (0.7, 1.5, 2.0):
+            with self.subTest(scale=scale):
+                _, scaled_draw, scaled_regions = self.render((505, 105, scale))
+                for key in ('controls', 'window', 'heart'):
+                    self.assertEqual(scaled_draw[key], draw[key])
+                self.assertEqual(scaled_draw['lyrics'][2], draw['lyrics'][2])   # top
+                self.assertEqual(scaled_draw['lyrics'][5], '105')                # height
+                for key in ('prev', 'play', 'next', 'minimize', 'close'):
+                    self.assertEqual(scaled_regions[key], regions[key])
+                self.assertEqual(scaled_draw['scale'][1], f'{scale:g}')         # the lyrics' text
+
+    def test_text_beside_the_artwork_stops_growing_where_it_would_not_fit(self):
+        self.assertEqual(nowplaying.header_scale_for(1.0), 1.0)
+        self.assertEqual(nowplaying.header_scale_for(0.7), 0.7)
+        capped = nowplaying.header_scale_for(2.0)
+        self.assertGreater(capped, 1.0)
+        self.assertLess(capped, 2.0)
+        _, draw, _ = self.render((505, 63, 2.0))
+        self.assertEqual(draw['scale'][1:], ['2', f'{capped:g}'])
+
+    def test_lyrics_height_sets_the_lyrics_area(self):
+        _, short, _ = self.render((505, 40, 1.0))
+        _, tall, _ = self.render((505, 400, 1.0))
+        self.assertEqual((short['lyrics'][5], tall['lyrics'][5]), ('40', '400'))
+        self.assertEqual(short['lyrics'][2], tall['lyrics'][2])
 
 
 class FilesTest(support.TempDirTest):
