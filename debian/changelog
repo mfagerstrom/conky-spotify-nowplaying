@@ -1,3 +1,12 @@
+conky-spotify-nowplaying (1.3.0) resolute; urgency=medium
+
+  * Lyrics are cached on disk per track, so a song played again shows
+    its lyrics at once and without a network lookup. Tracks with no
+    synced lyrics are remembered for a week; the cache keeps the 2000
+    most recently used tracks.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Tue, 29 Sep 2026 10:33:32 -0400
+
 conky-spotify-nowplaying (1.2.0) resolute; urgency=medium
 
   * Resize the widget by dragging an edge or corner: the sides set its
