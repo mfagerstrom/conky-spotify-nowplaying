@@ -150,6 +150,7 @@ class State:
         self.track_since = 0.0     # when the current track id first appeared
         self.lyrics_written = None # version of the lyrics last written to lyrics.txt
         self.lyrics_settings = None   # (shown, scrolling) last logged
+        self.heart_hidden = False     # the heart was left out while Spotify rate limits likes
         self.lock = threading.Lock()
 
 
@@ -591,6 +592,9 @@ def render():
     # has had a moment to settle, and look them up again if it changes afterwards.
     lyrics_key = (track_id, title, artist, album, round(duration))
     fetch_lyrics_now = fetch_cover_now = False
+    # While Spotify rate limits the widget, the like state cannot be read and a click only
+    # posts a notification, so the heart is left out. Logged out, it stays: a click logs in.
+    heart_hidden = bool(spotify_api.rate_limited_until()) and os.path.exists(spotify_api.TOKEN_FILE)
     with state.lock:
         new_track = track_id != state.track
         if new_track:
@@ -614,7 +618,12 @@ def render():
             fetch_cover_now = True
             if no_art:
                 log(f'no artwork: {title!r} by {artist!r} ({track_id}), showing the placeholder')
-        poll_like = new_track or now - state.liked_checked > LIKE_POLL_SECONDS
+        # The limit lifting re-checks the heart before it is drawn again.
+        poll_like = (new_track or now - state.liked_checked > LIKE_POLL_SECONDS
+                     or (state.heart_hidden and not heart_hidden))
+        if state.heart_hidden != heart_hidden:
+            state.heart_hidden = heart_hidden
+            log('heart: hidden while rate limited' if heart_hidden else 'heart: shown, rate limit lifted')
         if poll_like:
             state.liked_checked = now
     if new_track:
@@ -682,8 +691,9 @@ def render():
             f'controls {prev_cx} {play_cx} {next_cx} {mid_y} {SKIP_SIZE} {PLAY_SIZE} {int(status == "Playing")}',
             f'times {time_x} {MARGIN + widget_width} {mid_y + BAR_DROP}',
             f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}',
-            f'heart {heart_cx} {top_cy} {HEART_WIDTH} {heart_state} ' + ' '.join(map(str, heart_box)),
             f'label {COLUMN_X} {ART_TOP}']
+    if not heart_hidden:
+        draw.append(f'heart {heart_cx} {top_cy} {HEART_WIDTH} {heart_state} ' + ' '.join(map(str, heart_box)))
     lyrics_area = lyrics_scroll = None
     if lyr:
         # Full width under the artwork and controls: reserve lyrics_height there, and
@@ -710,7 +720,7 @@ def render():
         'play': [play_cx - half, mid_y - half, play_cx + half, mid_y + half],
         'next': [next_cx - SKIP_SIZE / 2 - 5, mid_y - half, next_cx + SKIP_SIZE / 2 + 5, mid_y + half],
         'seek': [bar_x0 - 6, mid_y + BAR_DROP - 12, bar_x1 + 6, mid_y + BAR_DROP + 12],
-        'heart': heart_box,
+        'heart': None if heart_hidden else heart_box,
         'bar': [bar_x0, bar_x1],
         'duration': duration,
     })

@@ -167,7 +167,8 @@ class WindowButtonsTest(support.TempDirTest):
     def setUp(self):
         super().setUp()
         self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt', LOG='nowplaying.log')
-        self.redirect(nowplaying.spotify_api, LIKED_FILE='liked')
+        self.redirect(nowplaying.spotify_api, LIKED_FILE='liked', BACKOFF_FILE='rate-limited-until',
+                      TOKEN_FILE='spotify-token.json')
         patcher = mock.patch.object(nowplaying, 'state', nowplaying.State())
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -206,6 +207,49 @@ class WindowButtonsTest(support.TempDirTest):
                 _, _, draw = self.render('Playing')
                 heart = next(line for line in draw.splitlines() if line.startswith('heart '))
                 self.assertEqual(heart.split()[4], want)
+
+    def rate_limit(self, seconds):
+        nowplaying.write_atomic(nowplaying.spotify_api.BACKOFF_FILE, str(time.time() + seconds))
+
+    def log_in(self):
+        nowplaying.write_atomic(nowplaying.spotify_api.TOKEN_FILE, '{}')
+
+    def test_the_heart_is_left_out_while_rate_limited(self):
+        _, shown, _ = self.render('Playing')
+        self.log_in()
+        self.rate_limit(3600)
+        nowplaying.write_atomic(nowplaying.spotify_api.LIKED_FILE, '1')
+        _, regions, draw = self.render('Playing')
+        self.assertNotIn('\nheart ', '\n' + draw)
+        self.assertIsNone(regions['heart'])
+        # minimize and close stay where they were
+        self.assertEqual(regions['minimize'], shown['minimize'])
+        self.assertEqual(regions['close'], shown['close'])
+        self.assertIn('heart: hidden while rate limited', support.read(nowplaying.LOG))
+
+    def test_the_heart_is_rechecked_and_drawn_once_the_limit_lifts(self):
+        self.log_in()
+        self.rate_limit(3600)
+        self.render('Playing')
+        nowplaying.state.liked_checked = time.time()        # no poll due on its own
+        self.rate_limit(-1)
+        answers = {'status': 'Playing',
+                   'metadata': 'track1\tTitle\tArtist\tAlbum\t\t10000000\t200000000'}
+        with mock.patch.object(nowplaying, 'playerctl', side_effect=lambda cmd, *_: answers[cmd]), \
+                mock.patch.object(nowplaying.threading, 'Thread') as thread, \
+                mock.patch.object(nowplaying.spotify_api, 'write_liked'):
+            nowplaying.render()
+        self.assertIn(nowplaying.fetch_liked, [c.kwargs['target'] for c in thread.call_args_list])
+        with open(nowplaying.REGIONS) as f:
+            self.assertIsNotNone(json.load(f)['heart'])
+        self.assertIn('\nheart ', '\n' + support.read(nowplaying.DRAW))
+        self.assertIn('heart: shown, rate limit lifted', support.read(nowplaying.LOG))
+
+    def test_logged_out_the_heart_stays_while_rate_limited(self):
+        self.rate_limit(3600)
+        _, regions, draw = self.render('Playing')
+        self.assertIsNotNone(regions['heart'])
+        self.assertIn('\nheart ', '\n' + draw)
 
     def test_buttons_stay_when_spotify_is_not_playing(self):
         text, regions, draw = self.render('Stopped')
