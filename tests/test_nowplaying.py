@@ -69,6 +69,20 @@ class ArtColourTest(support.TempDirTest):
         path = self.cover(lambda x, y: orange if x < 12 and y < 12 else (90, 75, 60))
         self.assertHue(path, orange)
 
+    def test_colour_split_across_hues_beats_a_gray_dominant_colour(self):
+        # Half pale gray-blue sky, a dull orange-brown band (not vivid), a teal stripe
+        # under the 5% vivid floor and dark gray below: too little gray for the accent
+        # rule, no vivid bucket big enough, but a fifth of the cover is coloured.
+        sky, brown, teal = (195, 212, 224), (92, 77, 64), (66, 110, 120)
+        rows = [sky] * 24 + [brown] * 8 + [teal] * 2 + [(30, 30, 30)] * 14
+        self.assertHue(self.cover(lambda x, y: rows[y]), brown)
+
+    def test_gray_dominant_colour_stays_when_colour_is_scarce(self):
+        # 80% gray, a faint tint that is not an accent, and colour on only 8% of it.
+        rows = [(128, 128, 128)] * 38 + [(160, 145, 125)] * 6 + [(100, 110, 140)] * 4
+        _, s, _ = self.hsv(self.cover(lambda x, y: rows[y]))
+        self.assertAlmostEqual(s, 0, places=6)
+
     def test_output_is_always_clamped(self):
         covers = {
             'white': lambda x, y: (255, 255, 255),

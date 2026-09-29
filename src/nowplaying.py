@@ -152,7 +152,8 @@ state = State()
 def art_colour(path):
     """Spotify-style backdrop: the cover's biggest vivid colour (if it covers at least 5%
     of the image, else its dominant colour), darkened so white text stays readable.
-    On a mostly grayscale cover, any small splash of colour beats the gray/black."""
+    On a mostly grayscale cover, any small splash of colour beats the gray/black, and a
+    gray/black dominant colour loses to the cover's main hue once colour fills 10% of it."""
     pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
     buckets, accents, total, neutral = {}, {}, 0, 0
@@ -172,12 +173,16 @@ def art_colour(path):
                 acc[0] += 1; acc[1] += r; acc[2] += g; acc[3] += b
     accent = max(accents.values(), default=None)
     vivid = [t for t in buckets.values() if t[4]]
+    dominant = max(buckets.values())
+    _, dsat, dv = colorsys.rgb_to_hsv(*(c / dominant[0] for c in dominant[1:4]))
     if neutral >= 0.85 * total and accent and accent[0] >= 0.004 * total:
         best = accent                            # ~9px floor keeps JPEG noise from winning
     elif vivid and max(vivid)[0] >= 0.05 * total:
         best = max(vivid)
+    elif (dsat < 0.15 or dv < 0.15) and sum(a[0] for a in accents.values()) >= 0.10 * total:
+        best = accent                            # colour split across hues still beats a gray sky
     else:
-        best = max(buckets.values())
+        best = dominant
     count, r, g, b = best[:4]
     h, sat, v = colorsys.rgb_to_hsv(r / count, g / count, b / count)
     return colorsys.hsv_to_rgb(h, min(sat, 0.65), min(max(v, 0.25), 0.38))
