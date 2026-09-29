@@ -17,7 +17,7 @@ class SpotifyApiTest(support.TempDirTest):
         super().setUp()
         self.redirect(spotify_api, CONF_DIR='config', CACHE_DIR='cache',
                       TOKEN_FILE='config/spotify-token.json', LIBRARY_FILE='cache/library.json',
-                      BACKOFF_FILE='rate-limited-until', LIKED_FILE='liked',
+                      BACKOFF_FILE='rate-limited-until', LIKED_FILE='liked', LIBRARY_LOCK='cache/library.json.lock',
                       TOGGLED_FILE='liked-toggled', LOCK_FILE='liked.lock')
         patcher = mock.patch.dict(spotify_api._track_keys, clear=True)
         patcher.start()
@@ -101,7 +101,7 @@ class RefreshLibraryTest(SpotifyApiTest):
 
     def test_missing_index_starts_a_scan_with_one_request_and_saves_it(self):
         lib, call = self.refresh(page(0, 120, [saved('spotify:track:1', 'A', 'X')]))
-        self.assertEqual(call, mock.call('GET', '/me/tracks', limit=50))
+        self.assertEqual(call, mock.call('GET', '/me/tracks', limit=50, offset=0))
         self.assertEqual(lib['scan'], {'offset': 50, 'keys': {'a\tx': ['spotify:track:1']}})
         self.assertEqual((lib['scanned'], lib['total']), (0, 120))
         self.assertEqual(spotify_api._load_library(), lib)
@@ -154,6 +154,32 @@ class RefreshLibraryTest(SpotifyApiTest):
                 lib, _ = self.refresh(page(0, total, [saved('spotify:track:2', 'B', 'X')]))
                 self.assertEqual(lib['scan']['offset'], 50)
                 self.assertEqual(lib['keys'], old)
+
+    def test_a_heart_click_saved_while_a_page_is_on_its_way_is_kept(self):
+        spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {'b\tx': ['spotify:track:2']},
+                                   'scan': {'offset': 50, 'keys': {'b\tx': ['spotify:track:2']}}})
+        spotify_api._track_keys['spotify:track:2'] = 'b\tx'
+
+        def api(method, path, **params):
+            if path == '/me/tracks':                            # the click lands mid-request
+                with mock.patch.object(spotify_api, 'api'):
+                    spotify_api._push_like('spotify:track:2', False)
+                return page(50, 120, [saved('spotify:track:3', 'C', 'X')])
+
+        with mock.patch.object(spotify_api, 'api', side_effect=api):
+            lib = spotify_api.refresh_library()
+        self.assertEqual(lib['keys'], {})
+        self.assertEqual(lib['scan'], {'offset': 100, 'keys': {'c\tx': ['spotify:track:3']}})
+        self.assertEqual(spotify_api._load_library(), lib)
+
+    def test_a_page_for_an_offset_the_scan_has_left_is_dropped(self):
+        with mock.patch.object(spotify_api, 'api', return_value=page(100, 120, [])) as api:
+            with mock.patch.object(spotify_api, '_load_library', side_effect=[
+                    {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 100, 'keys': {}}},
+                    {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 50, 'keys': {}}}]):
+                lib = spotify_api.refresh_library()
+        api.assert_called_once()
+        self.assertEqual(lib['scan']['offset'], 50)
 
     def test_liked_any_counts_keys_a_scan_has_gathered_so_far(self):
         spotify_api._save_library({'scanned': 0, 'total': 120, 'keys': {},

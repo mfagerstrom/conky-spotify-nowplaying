@@ -8,7 +8,7 @@
 The refresh token is kept in ~/.config/conky-spotify-nowplaying/spotify-token.json (mode 600).
 The like state for the widget is written to ~/.cache/conky-spotify-nowplaying/liked ("1"/"0").
 """
-import base64, fcntl, hashlib, http.server, json, os, secrets, subprocess, sys, time
+import base64, contextlib, fcntl, hashlib, http.server, json, os, secrets, subprocess, sys, time
 import urllib.error, urllib.parse, urllib.request
 
 CONF_DIR = os.path.expanduser('~/.config/conky-spotify-nowplaying')
@@ -19,6 +19,7 @@ LIKED_FILE = os.path.join(CACHE_DIR, 'liked')
 TOGGLED_FILE = LIKED_FILE + '-toggled'   # mtime = last click; pollers back off after it
 LOCK_FILE = LIKED_FILE + '.lock'
 LIBRARY_FILE = os.path.join(CACHE_DIR, 'library.json')
+LIBRARY_LOCK = LIBRARY_FILE + '.lock'
 BACKOFF_FILE = os.path.join(CACHE_DIR, 'rate-limited-until')   # epoch seconds, from Retry-After
 REDIRECT_URI = 'http://127.0.0.1:8888/callback'
 SCOPES = 'user-library-read user-library-modify'
@@ -195,6 +196,22 @@ def _load_library():
         return None
 
 
+@contextlib.contextmanager
+def _library_lock():
+    """Held for each read-modify-write of the index: the widget's scan and a heart click
+    (its own process) both change it. Never held across a request, so neither waits long."""
+    os.makedirs(os.path.dirname(LIBRARY_FILE), exist_ok=True)
+    with open(LIBRARY_LOCK, 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _indexes(lib):
+    """The key sets a change to the index goes into: a scan in progress replaces
+    lib['keys'] with its own when it ends, so it gets every change too."""
+    return [lib['keys']] + ([lib['scan']['keys']] if 'scan' in lib else []) if lib else []
+
+
 def _save_library(lib):
     os.makedirs(os.path.dirname(LIBRARY_FILE), exist_ok=True)
     with open(LIBRARY_FILE + '.tmp', 'w') as f:
@@ -245,20 +262,26 @@ def refresh_library(max_age=24 * 3600):
     elsewhere). It fetches one page per call and saves its offset and keys after each, so a
     restart or a 429 resumes where it stopped. Otherwise the call just picks up the newest
     likes from the first page. Returns the index; lib['scan'] is there while a scan runs."""
-    lib = _load_library()
-    if lib and 'scan' in lib:
-        page = api('GET', '/me/tracks', limit=50, offset=lib['scan']['offset'])
+    before = _load_library()
+    page = api('GET', '/me/tracks', limit=50,
+               offset=before['scan']['offset'] if before and 'scan' in before else 0)
+    with _library_lock():
+        lib = _load_library()                   # again: a heart click may have saved meanwhile
+        if lib and 'scan' in lib:
+            if lib['scan']['offset'] != page['offset']:
+                return lib                      # another copy of the widget moved it on
+            return _scan_page(lib, page)
+        if page['offset']:
+            # the scan ended or the index went while this page was on its way
+            return lib or {'scanned': 0, 'total': 0, 'keys': {}}
+        if lib and time.time() - lib['scanned'] < max_age and page['total'] >= lib['total']:
+            _index_page(lib, page['items'])
+            lib['total'] = page['total']
+            _save_library(lib)
+            return lib
+        lib = lib or {'scanned': 0, 'total': page['total'], 'keys': {}}
+        lib['scan'] = {'offset': 0, 'keys': {}}
         return _scan_page(lib, page)
-    first = api('GET', '/me/tracks', limit=50)
-    if lib and time.time() - lib['scanned'] < max_age and first['total'] >= lib['total']:
-        _index_page(lib, first['items'])
-        lib['total'] = first['total']
-        _save_library(lib)
-        return lib
-    lib = lib or {'scanned': 0, 'total': first['total'], 'keys': {}}
-    lib['scan'] = {'offset': 0, 'keys': {}}
-    return _scan_page(lib, first)
-
 
 def is_liked_any(uri):
     """What the heart shows: this track, or any same-titled release by the same artist."""
@@ -316,22 +339,21 @@ def toggle():
 
 
 def _push_like(uri, want):
-    lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}
     key = track_key(uri)
-    # a scan in progress replaces lib['keys'] with its own when it ends, so it gets the change too
-    indexes = [lib['keys']] + ([lib['scan']['keys']] if 'scan' in lib else [])
     if want:
         api('PUT', '/me/library', uris=uri)
-        for keys in indexes:
-            keys.setdefault(key, [])
-            if uri not in keys[key]:
-                keys[key].append(uri)
     else:
         # unliking removes every saved release of the song, or the heart would stay on
-        uris = sorted({uri}.union(*(keys.pop(key, []) for keys in indexes)))
+        uris = sorted({uri}.union(*(keys.get(key, []) for keys in _indexes(_load_library()))))
         api('DELETE', '/me/library', uris=','.join(uris))
-    _save_library(lib)
-
+    with _library_lock():
+        lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}
+        for keys in _indexes(lib):
+            if not want:
+                keys.pop(key, None)
+            elif uri not in keys.setdefault(key, []):
+                keys[key].append(uri)
+        _save_library(lib)
 
 def recently_toggled(seconds=15):
     try:
