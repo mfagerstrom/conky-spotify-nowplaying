@@ -141,7 +141,11 @@ Settings live in `~/.config/conky-spotify-nowplaying/` (`position`, `size`, `on-
 - Tested on Ubuntu 26.04, GNOME/Wayland, with 2x display scaling across three monitors.
 - The widget is an undecorated window on every workspace. Always on top, it stays above
   other windows; with that unticked, it is raised when clicked and covered like any other.
-- Lyrics coverage depends on LRCLIB; only synced lyrics are shown.
+- Lyrics coverage depends on LRCLIB; only synced lyrics are shown. Each track's lyrics are
+  cached in `~/.cache/conky-spotify-nowplaying/lyrics/` (up to 2000 tracks, the least
+  recently played dropped first), so a track played again, or after a restart, shows them
+  without asking LRCLIB. A track LRCLIB has no synced lyrics for is asked about again after
+  a week; a failed lookup is never cached. Delete that folder to fetch everything afresh.
 
 ## License
 
