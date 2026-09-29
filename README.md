@@ -104,8 +104,10 @@ after every page, so quitting the widget or hitting a rate limit resumes the rea
 than restarting it.
 
 Spotify's limits for new developer apps are low. If Spotify rate-limits the app, the widget
-stops calling the API until the block lifts (the heart shows the track as not liked, and clicking it
-tells you how long); everything else keeps working.
+stops calling the API until the block lifts, and hides the heart meanwhile, since it can
+neither read nor change likes; everything else keeps working, and minimize and close stay
+where they are. The heart comes back, with the track's like state checked again, once the
+block lifts.
 
 ## Development
 
