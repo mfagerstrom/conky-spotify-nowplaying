@@ -6,6 +6,7 @@ import ctypes, os, signal, subprocess, sys
 
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 try:
     gi.require_version('AyatanaAppIndicator3', '0.1')
     from gi.repository import AyatanaAppIndicator3 as AppIndicator
@@ -60,14 +61,28 @@ def no_fallback():
     shows nothing and GTK logs a gtk_widget_get_scale_factor critical for it. Clear the
     class's fallback hook, which the library skips when unset; the item still registers
     once the watcher answers. The hook is AppIndicatorClass's 26th pointer: GObjectClass
-    is 17 pointer-sized fields, then eight signal slots come before it."""
+    is 17 pointer-sized fields, then eight signal slots come before it, and seven more
+    slots follow. A class of any other size is left alone rather than written blind."""
+    class TypeQuery(ctypes.Structure):
+        _fields_ = [('type', ctypes.c_size_t), ('type_name', ctypes.c_char_p),
+                    ('class_size', ctypes.c_uint), ('instance_size', ctypes.c_uint)]
+
     gobject = ctypes.CDLL('libgobject-2.0.so.0')
     gobject.g_type_from_name.restype = ctypes.c_size_t
     gobject.g_type_from_name.argtypes = [ctypes.c_char_p]
+    gobject.g_type_query.argtypes = [ctypes.c_size_t, ctypes.POINTER(TypeQuery)]
     gobject.g_type_class_ref.restype = ctypes.c_void_p
     gobject.g_type_class_ref.argtypes = [ctypes.c_size_t]
-    klass = gobject.g_type_class_ref(gobject.g_type_from_name(Indicator.__gtype__.name.encode()))
-    ctypes.c_void_p.from_address(klass + 25 * ctypes.sizeof(ctypes.c_void_p)).value = None
+    gtype = gobject.g_type_from_name(Indicator.__gtype__.name.encode())
+    query = TypeQuery()
+    gobject.g_type_query(gtype, ctypes.byref(query))
+    pointer = ctypes.sizeof(ctypes.c_void_p)
+    if query.class_size != 33 * pointer:
+        print(f'tray: unexpected AppIndicator class size {query.class_size}; keeping its fallback',
+              file=sys.stderr)
+        return
+    klass = gobject.g_type_class_ref(gtype)
+    ctypes.c_void_p.from_address(klass + 25 * pointer).value = None
 
 
 def main():
