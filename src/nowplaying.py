@@ -153,7 +153,8 @@ def art_colour(path):
     """Spotify-style backdrop: the cover's biggest vivid colour (if it covers at least 5%
     of the image, else its dominant colour), darkened so white text stays readable.
     On a mostly grayscale cover, any small splash of colour beats the gray/black, and a
-    gray/black dominant colour loses to the cover's main hue once colour fills 10% of it."""
+    grayish or near-black dominant colour loses to the cover's main hue once colour fills
+    10% of it."""
     pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
     buckets, accents, total, neutral = {}, {}, 0, 0
@@ -179,8 +180,8 @@ def art_colour(path):
         best = accent                            # ~9px floor keeps JPEG noise from winning
     elif vivid and max(vivid)[0] >= 0.05 * total:
         best = max(vivid)
-    elif (dsat < 0.15 or dv < 0.15) and sum(a[0] for a in accents.values()) >= 0.10 * total:
-        best = accent                            # colour split across hues still beats a gray sky
+    elif (dsat < 0.25 or dv < 0.2) and sum(a[0] for a in accents.values()) >= 0.10 * total:
+        best = accent                            # a dominant colour too faint to be an accent loses
     else:
         best = dominant
     count, r, g, b = best[:4]

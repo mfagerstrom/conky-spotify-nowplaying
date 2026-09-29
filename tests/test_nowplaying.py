@@ -77,6 +77,12 @@ class ArtColourTest(support.TempDirTest):
         rows = [sky] * 24 + [brown] * 8 + [teal] * 2 + [(30, 30, 30)] * 14
         self.assertHue(self.cover(lambda x, y: rows[y]), brown)
 
+    def test_colour_beats_a_faintly_tinted_dominant_colour(self):
+        # The same cover with a bluer sky (saturation 0.2): still too faint to be a colour.
+        sky, brown, teal = (180, 205, 225), (92, 77, 64), (66, 110, 120)
+        rows = [sky] * 24 + [brown] * 8 + [teal] * 2 + [(30, 30, 30)] * 14
+        self.assertHue(self.cover(lambda x, y: rows[y]), brown)
+
     def test_gray_dominant_colour_stays_when_colour_is_scarce(self):
         # 80% gray, a faint tint that is not an accent, and colour on only 8% of it.
         rows = [(128, 128, 128)] * 38 + [(160, 145, 125)] * 6 + [(100, 110, 140)] * 4
