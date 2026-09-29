@@ -13,7 +13,9 @@ which conky.conf renders with ${execpi}. It covers:
   - lyrics from LRCLIB (lrclib.net) -> lyrics.txt. draw.lua scrolls synced ones smoothly
     along with playback (previous / current / next line); plain ones, for a track LRCLIB
     has no synced lyrics for, are a static block the mouse wheel scrolls. Each answer is
-    cached on disk per track (lyrics/), so a track played again is not looked up.
+    cached on disk per track (lyrics/), so a track played again is not looked up. The tray
+    menu's settings (lyrics_settings.py) turn lyrics off, which collapses their area and
+    looks nothing up, or show synced ones statically too.
 """
 import functools, hashlib, json, math, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
 import gi
@@ -21,6 +23,7 @@ gi.require_version('Pango', '1.0'); gi.require_version('PangoCairo', '1.0'); gi.
 from gi.repository import GdkPixbuf, Pango, PangoCairo
 import colorsys
 
+import lyrics_settings
 import spotify_api
 import widget_size as size_file
 
@@ -146,6 +149,7 @@ class State:
         self.cover_url = None      # art URL last requested
         self.track_since = 0.0     # when the current track id first appeared
         self.lyrics_written = None # version of the lyrics last written to lyrics.txt
+        self.lyrics_settings = None   # (shown, scrolling) last logged
         self.lock = threading.Lock()
 
 
@@ -578,6 +582,10 @@ def render():
     duration = int(len_us or 0) / 1e6
 
     now = time.time()
+    lyrics_on, lyrics_scrolling = lyrics_settings.shown(), lyrics_settings.scrolling()
+    if (lyrics_on, lyrics_scrolling) != state.lyrics_settings:
+        state.lyrics_settings = (lyrics_on, lyrics_scrolling)
+        log(f'lyrics: {lyrics_scrolling}' if lyrics_on else 'lyrics: off, not looked up')
     # When skipping, Spotify announces the new track id a moment before the rest of the
     # metadata (title, length, art) catches up. Only look up lyrics/art once the metadata
     # has had a moment to settle, and look them up again if it changes afterwards.
@@ -591,7 +599,9 @@ def render():
         settled = now - state.track_since >= METADATA_SETTLE and title and duration > 0
         if state.lyrics_retry is not None and now >= state.lyrics_retry:
             state.lyrics_retry, state.lyrics_key = None, None
-        if settled and state.lyrics_key != lyrics_key:
+        # Turned off, lyrics are not looked up, and turned on again they are for the track
+        # playing, unless they were already fetched for it.
+        if settled and lyrics_on and state.lyrics_key != lyrics_key:
             state.lyrics_key, state.lyrics = lyrics_key, None
             fetch_lyrics_now = True
         # Spotify's DJ talks in clips with no length, which get it at once; a song whose
@@ -660,7 +670,7 @@ def render():
     bar_x1 = MARGIN + widget_width - time_w - 10
     fraction = min(max(position / duration, 0), 1) if duration else 0
     y += row
-    lyr = write_lyrics(track_id)
+    lyr = write_lyrics(track_id, lyrics_on, lyrics_scrolling == lyrics_settings.STATIC)
     lyrics_top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
     if lyr:
         bottom = lyrics_top + lyrics_height - BOTTOM_TRIM + MARGIN
@@ -707,35 +717,38 @@ def render():
     return '\n'.join(out)   # no trailing newline: it would add an empty line at the bottom
 
 
-def write_lyrics(track_id):
+def write_lyrics(track_id, shown=True, static=False):
     """Writes lyrics.txt for draw.lua when the track's lyrics change, and returns
     (version, lines, static): a version string that changes with the lyrics, their number
     of lines, and whether draw.lua shows them as a static block rather than following
-    playback. None when there are no lyrics to show.
+    playback. None when there are no lyrics to show, or `shown` is off.
 
-    Synced lyrics go under a 'synced' header as '<seconds>\\t<line>', plain ones under
-    'plain' as '\\t<line>'. Writing new lyrics puts a static block back at its top."""
-    lyrics = state.lyrics or {}
-    lines = list(lyrics.get('synced') or [])
-    if lines:
+    Synced lyrics go under a 'synced' header as '<seconds>\\t<line>'. Plain ones, and
+    synced ones when `static`, go under 'plain' as '\\t<line>'. Writing new lyrics, or
+    the same ones shown another way, puts a static block back at its top."""
+    lyrics = (state.lyrics or {}) if shown else {}
+    synced = list(lyrics.get('synced') or [])
+    if synced and not static:
+        lines = synced
         if lines[0][0] > 0:
             lines.insert(0, (0.0, ''))           # before the first line: show the intro as ♫
         mode, body = 'synced', '\n'.join(f'{t:.2f}\t{l or "♫"}' for t, l in lines)   # instrumental: ♫
     else:
-        lines = lyrics.get('plain') or []
-        mode, body = 'plain', '\n'.join(f'\t{l}' for l in lines)
+        # untimed, the blank lines of instrumental breaks read as the gaps between verses
+        lines = plain_lines('\n'.join(l for _, l in synced)) if synced else lyrics.get('plain') or []
+        mode, body = 'static' if synced else 'plain', '\n'.join(f'\t{l}' for l in lines)
     if not lines:
         state.lyrics_written = None              # the same lyrics coming back start at the top
         return None
     version = f'{abs(hash((track_id, mode, len(lines)))) % 10**8}'
     if state.lyrics_written != version:
-        write_atomic(LYRICS, f'{mode}\n{body}\n')
+        write_atomic(LYRICS, f"{'synced' if mode == 'synced' else 'plain'}\n{body}\n")
         try:
             os.remove(LYRICS_SCROLL)
         except OSError:
             pass
         state.lyrics_written = version
-    return version, len(lines), mode == 'plain'
+    return version, len(lines), mode != 'synced'
 
 
 def library_loop():

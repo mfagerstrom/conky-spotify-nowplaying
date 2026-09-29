@@ -166,7 +166,7 @@ class WindowButtonsTest(support.TempDirTest):
 
     def setUp(self):
         super().setUp()
-        self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt')
+        self.redirect(nowplaying, REGIONS='regions.json', DRAW='draw.txt', LOG='nowplaying.log')
         self.redirect(nowplaying.spotify_api, LIKED_FILE='liked')
         patcher = mock.patch.object(nowplaying, 'state', nowplaying.State())
         patcher.start()
@@ -225,6 +225,7 @@ class SizeSettingsTest(support.TempDirTest):
                       LYRICS_SCROLL='lyrics-scroll')
         self.redirect(nowplaying.spotify_api, LIKED_FILE='liked')
         self.redirect(nowplaying.size_file, PATH='size')
+        self.redirect(nowplaying.lyrics_settings, SHOWN='lyrics-shown', SCROLLING='lyrics-scrolling')
         state = nowplaying.State()
         state.track, state.lyrics = 'track1', {'synced': [(1.0, 'a line'), (2.0, '')]}
         patcher = mock.patch.object(nowplaying, 'state', state)
@@ -301,6 +302,43 @@ class SizeSettingsTest(support.TempDirTest):
             with self.subTest(rows=rows):
                 _, draw, regions = self.render((505, round(rows * row), 1.0))
                 self.assertEqual(regions['lyrics_scroll'], [draw['lyrics'][4], want])
+
+    def test_lyrics_off_collapse_the_lyrics_area(self):
+        text, draw, regions = self.render((505, 200, 1.0))
+        nowplaying.lyrics_settings.set_shown(False)
+        off_text, off_draw, off_regions = self.render((505, 200, 1.0))
+        self.assertNotIn('lyrics', off_draw)
+        self.assertEqual((off_regions['lyrics'], off_regions['lyrics_scroll']), (None, None))
+        self.assertLess(float(off_text.splitlines()[-1].split('voffset ')[1].rstrip('}')),
+                        float(text.splitlines()[-1].split('voffset ')[1].rstrip('}')))
+        nowplaying.lyrics_settings.set_shown(True)
+        _, back, _ = self.render((505, 200, 1.0))
+        self.assertEqual(back['lyrics'][5], '200')                    # its saved height
+
+    def test_lyrics_off_are_not_looked_up_and_on_again_are(self):
+        def fetches():
+            nowplaying.state.track_since = 0                          # settled
+            answers = {'status': 'Playing', 'metadata': 'track2\tNew\tArtist\tAlbum\t\t0\t200000000'}
+            with mock.patch.object(nowplaying, 'playerctl', side_effect=lambda cmd, *_: answers[cmd]), \
+                    mock.patch.object(nowplaying.threading, 'Thread') as thread, \
+                    mock.patch.object(nowplaying.spotify_api, 'write_liked'):
+                nowplaying.render()
+            return [c.kwargs['args'] for c in thread.call_args_list if c.kwargs['target'] is nowplaying.fetch_lyrics]
+
+        nowplaying.state.track = 'track2'
+        nowplaying.lyrics_settings.set_shown(False)
+        self.assertEqual(fetches(), [])
+        self.assertEqual(fetches(), [])
+        self.assertIn('lyrics: off, not looked up', support.read(nowplaying.LOG))
+        nowplaying.lyrics_settings.set_shown(True)
+        self.assertEqual(fetches(), [(('track2', 'New', 'Artist', 'Album', 200),)])
+        self.assertEqual(fetches(), [])                                # once
+
+    def test_static_synced_lyrics_get_the_wheel(self):
+        nowplaying.lyrics_settings.set_scrolling(nowplaying.lyrics_settings.STATIC)
+        _, draw, regions = self.render((505, 63, 1.0))
+        self.assertEqual(regions['lyrics_scroll'], [draw['lyrics'][4], 0])
+        self.assertTrue(support.read(nowplaying.LYRICS).startswith('plain\n'))
 
     def test_no_lyrics_means_no_lyrics_area(self):
         nowplaying.state.lyrics = {}
@@ -548,9 +586,9 @@ class WriteLyricsTest(support.TempDirTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def write(self, lyrics, track='track1'):
+    def write(self, lyrics, track='track1', **settings):
         self.state.lyrics = lyrics
-        return nowplaying.write_lyrics(track)
+        return nowplaying.write_lyrics(track, **settings)
 
     def scrolled(self):
         nowplaying.write_atomic(nowplaying.LYRICS_SCROLL, 'x 3')
@@ -585,6 +623,28 @@ class WriteLyricsTest(support.TempDirTest):
         self.write({}, track='track2')
         self.assertEqual(self.write({'plain': ['a', 'b']}), first)
         self.assertFalse(os.path.exists(nowplaying.LYRICS_SCROLL))
+
+    def test_static_synced_lyrics_are_written_untimed(self):
+        version, count, static = self.write({'synced': [(1.5, 'First'), (4.0, ''), (5.0, ''), (6.0, 'Second'),
+                                                        (9.0, '')]}, static=True)
+        self.assertEqual(support.read(nowplaying.LYRICS), 'plain\n\tFirst\n\t\n\tSecond\n')
+        self.assertEqual((count, static), (3, True))
+
+    def test_plain_lyrics_are_static_whatever_the_setting(self):
+        self.assertTrue(self.write({'plain': ['a']}, static=False)[2])
+
+    def test_switching_between_autoscroll_and_static_starts_at_the_top(self):
+        lyrics = {'synced': [(0.0, 'a'), (1.0, 'b')]}
+        autoscroll = self.write(lyrics)
+        static = self.write(lyrics, static=True)
+        self.assertNotEqual(autoscroll[0], static[0])
+        self.scrolled()
+        self.write(lyrics)
+        self.assertFalse(os.path.exists(nowplaying.LYRICS_SCROLL))
+
+    def test_lyrics_off_writes_nothing(self):
+        self.assertIsNone(self.write({'synced': [(0.0, 'a')]}, shown=False))
+        self.assertFalse(os.path.exists(nowplaying.LYRICS))
 
     def test_plain_and_synced_lyrics_of_one_length_differ_in_version(self):
         plain = self.write({'plain': ['a', 'b']})

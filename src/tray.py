@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Top-bar (AppIndicator) icon for the widget: shows the current track, sets the text
-scaling, toggles always-on-top and start-at-login, minimizes and restores the widget, and
-quits it. Started by the launcher's supervisor."""
+scaling, turns lyrics on or off and picks how they scroll, toggles always-on-top and
+start-at-login, minimizes and restores the widget, and quits it. Started by the launcher's
+supervisor."""
 import ctypes, os, signal, subprocess, sys
 
 import gi
@@ -16,6 +17,7 @@ except (ValueError, ImportError):
     sys.exit(78)   # tells the supervisor not to keep restarting us
 from gi.repository import Gdk, GLib, Gtk
 
+import lyrics_settings
 import widget_size
 
 NAME = 'conky-spotify-nowplaying'
@@ -138,6 +140,48 @@ def main():
     menu.append(reset)
     menu.append(Gtk.SeparatorMenuItem())
 
+    # Lyrics on or off, and Lyrics scrolling: Autoscroll or Static, the current one checked,
+    # greyed out while lyrics are off.
+    lyrics = Gtk.CheckMenuItem(label='Lyrics')
+    scrolling_menu = Gtk.Menu()
+    scrolling = Gtk.MenuItem(label='Lyrics scrolling')
+    scrolling_items = {}
+    syncing_lyrics = False
+
+    def sync_lyrics():
+        nonlocal syncing_lyrics
+        syncing_lyrics = True                   # set_active emits the same signals a click does
+        shown, current = lyrics_settings.shown(), lyrics_settings.scrolling()
+        if lyrics.get_active() != shown:
+            lyrics.set_active(shown)
+        for mode, item in scrolling_items.items():
+            item.set_active(mode == current)
+        scrolling.set_sensitive(shown)
+        syncing_lyrics = False
+
+    def toggle_lyrics(item):
+        if not syncing_lyrics:
+            lyrics_settings.set_shown(item.get_active())
+            sync_lyrics()
+
+    def pick_scrolling(mode):
+        if not syncing_lyrics:
+            lyrics_settings.set_scrolling(mode)
+            sync_lyrics()                       # a click on the checked one unchecked it
+
+    for mode, label in ((lyrics_settings.AUTOSCROLL, 'Autoscroll'), (lyrics_settings.STATIC, 'Static')):
+        item = Gtk.CheckMenuItem(label=label)
+        item.set_draw_as_radio(True)
+        item.connect('activate', lambda _, mode=mode: pick_scrolling(mode))
+        scrolling_items[mode] = item
+        scrolling_menu.append(item)
+    lyrics.connect('toggled', toggle_lyrics)
+    sync_lyrics()
+    scrolling.set_submenu(scrolling_menu)
+    menu.append(lyrics)
+    menu.append(scrolling)
+    menu.append(Gtk.SeparatorMenuItem())
+
     always_on_top = Gtk.CheckMenuItem(label='Always on top')
     always_on_top.set_active(on_top())
     always_on_top.connect('toggled', lambda item: set_on_top(item.get_active()))
@@ -167,6 +211,7 @@ def main():
         track.set_label(now_playing())
         visibility.set_label(visibility_label())
         sync_sizes()                            # resized by dragging meanwhile
+        sync_lyrics()                           # changed outside the menu
         if always_on_top.get_active() != on_top():
             always_on_top.set_active(on_top())  # changed outside the menu; writes the same back
         if autostart.get_active() != os.path.exists(AUTOSTART):
