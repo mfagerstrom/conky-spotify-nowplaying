@@ -264,8 +264,8 @@ def read_cached_lyrics(key):
         with open(path) as f:
             entry = json.load(f)
         synced = [(float(sec), str(line)) for sec, line in entry['synced']]
-        if not synced and time.time() - entry['fetched'] > NO_LYRICS_TTL:
-            return None
+        if not synced and not 0 <= time.time() - entry['fetched'] <= NO_LYRICS_TTL:
+            return None                          # expired, or dated in the future by a clock change
         os.utime(path)                           # mark it used, for pruning
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -275,16 +275,39 @@ def read_cached_lyrics(key):
 def cache_lyrics(key, lyrics):
     """Saves a successful lookup, then prunes the least recently used entries past
     LYRICS_CACHE_MAX. A failure here costs only the cache, never the lyrics on screen."""
+    path = lyrics_cache_path(key)
+    # Two fetches of one key can overlap (a track skipped away from and back to while
+    # its first lookup runs), so each writes its own temporary file.
+    tmp = f'{path}.{threading.get_ident()}.tmp'
     try:
         os.makedirs(LYRICS_CACHE, exist_ok=True)
-        write_atomic(lyrics_cache_path(key),
-                     json.dumps({'fetched': time.time(), 'synced': lyrics.get('synced', [])}))
-        with os.scandir(LYRICS_CACHE) as entries:
-            files = [(e.stat().st_mtime, e.path) for e in entries if e.name.endswith('.json')]
-        for _, path in sorted(files)[:max(0, len(files) - LYRICS_CACHE_MAX)]:
-            os.remove(path)
+        with open(tmp, 'w') as f:
+            json.dump({'fetched': time.time(), 'synced': lyrics.get('synced', [])}, f)
+        os.replace(tmp, path)
     except OSError as e:
         log(f'lyrics cache write failed: {type(e).__name__}: {e}')
+        try:
+            os.remove(tmp)                       # pruning only sees .json files
+        except OSError:
+            pass
+        return
+    try:
+        names = [n for n in os.listdir(LYRICS_CACHE) if n.endswith('.json')]
+    except OSError:                              # the folder deleted since the write
+        return
+    if len(names) <= LYRICS_CACHE_MAX:
+        return
+    files = []
+    for name in names:
+        try:
+            files.append((os.path.getmtime(os.path.join(LYRICS_CACHE, name)), name))
+        except OSError:                          # pruned by another fetch meanwhile
+            pass
+    for _, name in sorted(files)[:max(0, len(files) - LYRICS_CACHE_MAX)]:
+        try:
+            os.remove(os.path.join(LYRICS_CACHE, name))
+        except OSError:
+            pass
 
 
 def fetch_lyrics(key):

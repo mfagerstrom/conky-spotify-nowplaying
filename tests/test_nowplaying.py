@@ -362,10 +362,7 @@ class FetchLyricsTest(support.TempDirTest):
         self.fetch(get={'syncedLyrics': SYNCED})
         self.assertIsNone(self.state.lyrics)
 
-
-class LyricsCacheTest(FetchLyricsTest):
-    """The on-disk cache in front of LRCLIB. Inherits FetchLyricsTest's setup and helper;
-    its tests run here again too, which checks they hold with the cache in place."""
+    # The on-disk cache in front of LRCLIB.
 
     def replay(self, **lrclib):
         """Plays the track again, as after a restart: fresh state, same key."""
@@ -404,6 +401,11 @@ class LyricsCacheTest(FetchLyricsTest):
         self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 1)
         self.assertEqual(self.state.lyrics['synced'][0], (1.5, 'First'))
 
+    def test_no_lyrics_dated_in_the_future_counts_as_expired(self):
+        self.fetch(get=None)
+        self.age(self.KEY, -3600)
+        self.assertEqual(self.replay(get={'syncedLyrics': SYNCED}).call_count, 1)
+
     def test_synced_lyrics_do_not_expire(self):
         self.fetch(get={'syncedLyrics': SYNCED})
         self.age(self.KEY, 365 * 24 * 3600)
@@ -440,7 +442,10 @@ class LyricsCacheTest(FetchLyricsTest):
                     nowplaying.fetch_lyrics(keys[0])
                     self.assertGreater(os.path.getmtime(nowplaying.lyrics_cache_path(keys[0])), 2000)
             kept = {k[1] for k in keys if os.path.exists(nowplaying.lyrics_cache_path(k))}
-        self.assertEqual(len(os.listdir(nowplaying.LYRICS_CACHE)), 3)
+        self.assertEqual(sorted(os.listdir(nowplaying.LYRICS_CACHE)),
+                         sorted(os.path.basename(nowplaying.lyrics_cache_path(k)) for k in keys
+                                if k[1] in kept))
+        self.assertEqual(len(kept), 3)
         self.assertEqual(kept, {'Song 0', 'Song 3', 'Song 4'})
 
 
