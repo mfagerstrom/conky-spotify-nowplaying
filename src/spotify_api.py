@@ -199,24 +199,25 @@ def track_key(uri):
 
 def _album_upc(album_id):
     if album_id not in _album_upcs:
-        _album_upcs[album_id] = api('GET', '/albums/' + album_id).get('external_ids', {}).get('upc')
+        _album_upcs[album_id] = (api('GET', '/albums/' + album_id).get('external_ids') or {}).get('upc')
     return _album_upcs[album_id]
 
 
-def _same_product(a, b):
-    """Whether two tracks sit on listings of one album product: the same album, or a
-    duplicate delivery of it under another album ID with the same UPC."""
+def _duplicate_listing(a, b):
+    """Whether two tracks sit on two album IDs that are one delivery of the same album
+    product twice (the same UPC)."""
     album_a, album_b = _track(a)[1], _track(b)[1]
     if album_a == album_b:
-        return True
+        return False
     upc = _album_upc(album_a)
     return upc is not None and upc == _album_upc(album_b)
 
 
 def _other_releases(uri, lib):
-    """Saved tracks, other than this one, that make the app show it as liked."""
+    """Saved tracks, other than this one, that make the app show it as liked. Yielded
+    one at a time, so a caller that needs only the first stops looking up the rest."""
     saved = {u for keys in _indexes(lib) for u in keys.get(track_key(uri), [])} - {uri}
-    return {u for u in saved if not _same_product(uri, u)}
+    return (u for u in sorted(saved) if not _duplicate_listing(uri, u))
 
 
 def _load_library():
@@ -323,7 +324,7 @@ def is_liked_any(uri):
     if is_liked(uri):
         return True
     # while a scan runs, what it has gathered so far counts too
-    return bool(_other_releases(uri, _load_library()))
+    return any(_other_releases(uri, _load_library()))
 
 
 def write_liked(value):
@@ -375,7 +376,7 @@ def _push_like(uri, want):
         api('PUT', '/me/library', uris=uri)
     else:
         # unliking removes every saved release the heart counts, or it would stay on
-        uris = {uri} | _other_releases(uri, _load_library())
+        uris = {uri, *_other_releases(uri, _load_library())}
         api('DELETE', '/me/library', uris=','.join(sorted(uris)))
     with _library_lock():
         lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}

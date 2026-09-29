@@ -24,11 +24,12 @@ class SpotifyApiTest(support.TempDirTest):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def track(self, uri, key, album=None, upc=None):
-        """Answers what the API would say about a track: its key, album and album UPC."""
+    def track(self, uri, key, album=None, upc=...):
+        """Answers what the API would say about a track: its key, album and album UPC
+        (None for an album without one)."""
         album = album or 'album-' + uri
         spotify_api._tracks[uri] = (key, album)
-        spotify_api._album_upcs[album] = upc or 'upc-' + album
+        spotify_api._album_upcs[album] = 'upc-' + album if upc is ... else upc
 
     def at(self, when):
         """Freezes spotify_api's clock at `when` for the rest of the test."""
@@ -262,11 +263,25 @@ class DuplicateListingTest(SpotifyApiTest):
             self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
 
     def test_albums_without_a_upc_are_never_twins(self):
-        self.track('spotify:track:twin', 'goner - demo\tkids that fly', 'no-upc-1', None)
-        spotify_api._album_upcs['no-upc-1'] = None
-        spotify_api._album_upcs['deluxe'] = None
+        self.track('spotify:track:playing', 'goner - demo\tkids that fly', 'deluxe', None)
+        self.track('spotify:track:twin', 'goner - demo\tkids that fly', 'deluxe-again', None)
         self.save('spotify:track:twin')
         self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+
+    def test_another_track_on_the_same_album_still_counts(self):
+        self.track('spotify:track:reissue', 'goner - demo\tkids that fly', 'deluxe', '859777506334')
+        self.save('spotify:track:reissue')
+        self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+
+    def test_the_heart_stops_looking_at_the_first_save_that_counts(self):
+        self.save('spotify:track:single', 'spotify:track:twin')
+        with mock.patch.object(spotify_api, '_album_upc', wraps=spotify_api._album_upc) as upc:
+            self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+        self.assertEqual(upc.call_count, 2)                   # playing and single; twin never looked up
+
+    def test_album_without_external_ids_has_no_upc(self):
+        with mock.patch.object(spotify_api, 'api', return_value={'external_ids': None}):
+            self.assertIsNone(spotify_api._album_upc('bare'))
 
     def test_unliking_leaves_the_twin_saved_and_indexed(self):
         self.save('spotify:track:playing', 'spotify:track:twin', 'spotify:track:single')
