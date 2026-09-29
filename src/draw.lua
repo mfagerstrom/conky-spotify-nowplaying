@@ -1,5 +1,6 @@
 -- Cairo drawing for the widget, fed by nowplaying.py:
---   draw.txt      geometry (logical px) + a playback clock, rewritten 4x a second
+--   draw.txt      geometry (logical px) + a playback clock, rewritten 4x a second; its scale
+--                 line is the display's scale, the lyrics' text scale and the times'
 --   lyrics.txt    timed lyric lines, rewritten when the track's lyrics change
 --   bg.txt        background colour picked from the album art
 --   seek-preview  fraction under the pointer while conky-mouse.py drags the seek bar
@@ -211,6 +212,40 @@ local function draw_bar(cr, b, s, pos)
     end
 end
 
+local function draw_label(cr, l, s, text)
+    -- NOW PLAYING in conky.conf's color1, 10 pt Ubuntu Sans Bold at its text scale (like
+    -- nowplaying.py's LABEL_FONT), the tops of its capitals on the given line
+    cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD)
+    cairo_set_font_size(cr, 10 * text * 96 / 72 * s)
+    cairo_set_source_rgba(cr, 0x1d / 255, 0xb9 / 255, 0x54 / 255, 1)
+    local ext = cairo_text_extents_t:create()
+    cairo_text_extents(cr, 'NOW PLAYING', ext)
+    cairo_move_to(cr, l[1] * s, l[2] * s - ext.y_bearing)
+    cairo_show_text(cr, 'NOW PLAYING')
+end
+
+local function fmt_time(sec)
+    sec = math.floor(math.max(sec, 0))
+    return string.format('%d:%02d', sec // 60, sec % 60)
+end
+
+local function draw_times(cr, t, s, text, pos, duration)
+    -- elapsed from the left edge, total to the right edge, both centred on the bar's line:
+    -- conky.conf's default_color, 11 pt Ubuntu Sans at their text scale, like nowplaying.py's TIME_FONT
+    local x0, x1, y = t[1] * s, t[2] * s, t[3] * s
+    local total = fmt_time(duration)
+    cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
+    cairo_set_font_size(cr, 11 * text * 96 / 72 * s)
+    cairo_set_source_rgba(cr, 0xd0 / 255, 0xd0 / 255, 0xd0 / 255, 1)
+    local ext = cairo_text_extents_t:create()
+    cairo_text_extents(cr, total, ext)
+    local baseline = y - ext.y_bearing - ext.height / 2              -- the digits' ink centred on y
+    cairo_move_to(cr, x0, baseline)
+    cairo_show_text(cr, fmt_time(math.min(pos, duration)))
+    cairo_move_to(cr, x1 - ext.x_advance, baseline)
+    cairo_show_text(cr, total)
+end
+
 local function ellipsize(cr, text, width)
     local ext = cairo_text_extents_t:create()
     cairo_text_extents(cr, text, ext)
@@ -225,7 +260,7 @@ end
 
 local function show_text_with_notes(cr, text, bold)
     -- Cairo's simple text API has no font fallback and Ubuntu Sans has no music notes,
-    -- so draw ♪/♫/♬ runs in DejaVu Sans and everything else in Ubuntu Sans.
+    -- so draw ♪/♫/♬ runs in Noto Music, made for them, and everything else in Ubuntu Sans.
     local weight = bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL
     local pos = 1
     while pos <= #text do
@@ -236,14 +271,15 @@ local function show_text_with_notes(cr, text, bold)
             cairo_show_text(cr, plain)
         end
         if not a then break end
-        cairo_select_font_face(cr, 'DejaVu Sans', CAIRO_FONT_SLANT_NORMAL, weight)
+        cairo_select_font_face(cr, 'Noto Music', CAIRO_FONT_SLANT_NORMAL, weight)
         cairo_show_text(cr, text:sub(a, b))
         pos = b + 1
     end
 end
 
-local function draw_lyrics(cr, l, s, pos)
-    local x0, x1, top, row = l[1] * s, l[2] * s, l[3] * s, l[4] * s
+local function draw_lyrics(cr, l, s, text, pos)
+    local x0, x1, top, row, height = l[1] * s, l[2] * s, l[3] * s, l[4] * s, l[6] * s
+    local rows = height / row                          -- how many lines fit, fractional
     local lines = lyrics.lines
     if #lines == 0 then return end
 
@@ -256,23 +292,39 @@ local function draw_lyrics(cr, l, s, pos)
     scroll = scroll + (idx - scroll) * (1 - math.exp(-dt() * 12 / 1.1))   -- ~0.33 s glide
 
     cairo_save(cr)
-    cairo_rectangle(cr, x0, top, x1 - x0, row * 3)
+    cairo_rectangle(cr, x0, top, x1 - x0, height)
     cairo_clip(cr)
-    local centre = top + row * 1.5
-    for i = math.max(1, idx - 2), math.min(#lines, idx + 2) do
+    local faded = rows >= 5                            -- fewer lines keep every one whole
+    if faded then cairo_push_group(cr) end
+    local centre = top + height / 2                    -- the current line's row
+    local edge = math.max((rows - 1) / 2, 0)          -- how far the last whole row either side is
+    local reach = math.ceil(rows / 2) + 1
+    for i = math.max(1, idx - reach), math.min(#lines, idx + reach) do
         local y = centre + (i - scroll) * row
         local dist = math.abs(i - scroll)
         local a = 1 - math.min(dist, 1) * 0.45
-        if dist > 1 then a = a * math.max(0, (1.5 - dist) / 0.5) end      -- fade out past the edge rows
+        if dist > edge then a = a * math.max(0, (edge + 0.5 - dist) / 0.5) end   -- fade out past it
         local bold = i == idx
         cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL,
                                bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL)
         -- 11 pt, growing smoothly to 13 pt as a line scrolls into the middle (current) row
-        local pt = 11 + 2 * math.max(0, 1 - dist)
+        local pt = (11 + 2 * math.max(0, 1 - dist)) * text
         cairo_set_font_size(cr, pt * 96 / 72 * s)
         cairo_set_source_rgba(cr, 1, 1, 1, a)
         cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row
         show_text_with_notes(cr, ellipsize(cr, lines[i][2], x1 - x0), bold)
+    end
+    -- Paint the lines through a mask that leaves the top and bottom lines half visible: clear
+    -- for half a row at each edge, then fading in over the row after that.
+    if faded then
+        cairo_pop_group_to_source(cr)
+        local mask = cairo_pattern_create_linear(0, top, 0, top + height)
+        for _, stop in ipairs({{0, 0}, {0.5, 0}, {1.5, 1}}) do
+            cairo_pattern_add_color_stop_rgba(mask, stop[1] / rows, 0, 0, 0, stop[2])
+            cairo_pattern_add_color_stop_rgba(mask, 1 - stop[1] / rows, 0, 0, 0, stop[2])
+        end
+        cairo_mask(cr, mask)
+        cairo_pattern_destroy(mask)
     end
     cairo_restore(cr)
 end
@@ -281,7 +333,7 @@ function conky_draw_bar()
     if conky_window == nil then return end
     local d = load_draw()
     if not d.scale then return end
-    local s = d.scale[1]
+    local s, text, times_text = d.scale[1], d.scale[2] or 1, d.scale[3] or 1   -- times_text: the header's too
 
     -- playback clock: resync on each draw.txt update, advance locally in between
     local c = d.clock
@@ -294,12 +346,14 @@ function conky_draw_bar()
     with_cairo(function(cr)
         if d.window then draw_window_buttons(cr, d.window, s) end
         if d.heart then draw_heart(cr, d.heart, s) end
+        if d.label then draw_label(cr, d.label, s, times_text) end
         if not d.bar then return end                -- Spotify not playing: top buttons only
         if d.controls then draw_controls(cr, d.controls, s) end
         draw_bar(cr, d.bar, s, clock.pos)
+        if d.times then draw_times(cr, d.times, s, times_text, clock.pos, d.bar[5]) end
         if d.lyrics then
             load_lyrics(d.lyrics[5])
-            draw_lyrics(cr, d.lyrics, s, clock.pos)
+            draw_lyrics(cr, d.lyrics, s, text, clock.pos)
         end
     end)
 end

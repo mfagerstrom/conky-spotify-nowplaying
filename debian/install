@@ -4,6 +4,8 @@ src/draw.lua usr/share/conky-spotify-nowplaying
 src/nowplaying.py usr/share/conky-spotify-nowplaying
 src/conky-mouse.py usr/share/conky-spotify-nowplaying
 src/spotify_api.py usr/share/conky-spotify-nowplaying
+src/widget_size.py usr/share/conky-spotify-nowplaying
+src/no-art.png usr/share/conky-spotify-nowplaying
 src/tray.py usr/share/conky-spotify-nowplaying
 packaging/conky-spotify-nowplaying.desktop usr/share/applications
 packaging/conky-spotify-nowplaying.svg usr/share/icons/hicolor/scalable/apps

@@ -20,52 +20,87 @@ from gi.repository import GdkPixbuf, Pango, PangoCairo
 import colorsys
 
 import spotify_api
+import widget_size as size_file
 
 CACHE = os.path.expanduser('~/.cache/conky-spotify-nowplaying')
 OUT = os.path.join(CACHE, 'widget.txt')
 COVER = os.path.join(CACHE, 'cover.jpg')
+# Shown for a track with no artwork at all, as while Spotify's DJ talks between songs,
+# instead of the last song's cover.
+NO_ART_URL = 'file://' + os.path.join(os.path.dirname(os.path.abspath(__file__)), 'no-art.png')
 REGIONS = os.path.join(CACHE, 'regions.json')
 LOG = os.path.join(CACHE, 'nowplaying.log')
 BG = os.path.join(CACHE, 'bg.txt')               # background colour from the album art, for draw.lua
 DRAW = os.path.join(CACHE, 'draw.txt')           # geometry + playback clock for draw.lua
 LYRICS = os.path.join(CACHE, 'lyrics.txt')       # timed lyric lines for draw.lua
 
-# Layout, in conky's logical pixels. Must match conky.conf (minimum/maximum_width = 505).
-TEXT_WIDTH = 505
-MARGIN = 20                                   # border_inner_margin
+# Layout, in conky's logical pixels. conky.conf sets no size or margin: the window is as big
+# as this markup, which carries the margins and, through a goto, the width. The user's size
+# settings (widget_size.py) set the width, the lyrics' height and the text's size.
+MARGIN = 20                                   # around the contents
+MIN_HEIGHT = 108                              # the contents' height at least: the artwork's, less BOTTOM_TRIM
 COLUMN_X = 154                                # text column, right of the 118 px album art
 ART_LEFT, ART_BOTTOM = 22, 140               # artwork edges, measured from a capture
-LABEL_LIFT = 7                                # lifts NOW PLAYING to the artwork's top edge
+ART_TOP = ART_LEFT                            # the same margin as its left; draw.lua tops NOW PLAYING at it
+TOP_ROW = 13                                  # the top of the row NOW PLAYING and the icons sit in
 LYRIC_GAP = 10                                # space between controls/artwork and lyrics
 LYRIC_SPACING = 3                             # extra space between lyric rows
-BOTTOM_TRIM = 10                              # px taken off border_inner_margin at the bottom
-                                              # (conky.conf's minimum_height is reduced to match)
+BOTTOM_TRIM = 10                              # px taken off MARGIN at the bottom
 SPACER_FONT = 'Ubuntu Sans 1'
-SPACER_HEIGHT = 28                            # what conky actually adds for that spacer line (measured)
-TIME_DROP = 3                                 # timestamps sit this much below the buttons' centre line
+SPACER_HEIGHT = 2                             # what conky adds for that spacer line (measured)
 BAR_DROP = 2                                  # seek bar sits this much below the buttons' centre line
-COLUMN_WIDTH = TEXT_WIDTH - COLUMN_X - 4
 TITLE_FONT, ARTIST_FONT, LYRIC_FONT = 'Ubuntu Sans Bold 17', 'Ubuntu Sans 13', 'Ubuntu Sans 11'
 LABEL_FONT, HEART_FONT = 'Ubuntu Sans Bold 10', 'DejaVu Sans 15'
-TIME_FONT = 'Ubuntu Sans 11'
+MESSAGE_FONT = 'Ubuntu Sans 11'               # "Spotify not playing" and the like
+PLAIN_FONT = 'Ubuntu Sans 13'                 # between runs of text; see plain()
 CONTROL_ROW_FONT = 'DejaVu Sans 15'            # only sets the controls row's height
+# The fonts the text scale applies to; the heart and control fonts only size icons' rows.
+# Those beside the artwork, and the times in the controls row, follow it only as far as the
+# label, title and artist fit there (see header_scale_for). PLAIN_FONT is ARTIST_FONT, and
+# TIME_FONT is set apart from LYRIC_FONT and MESSAGE_FONT by its weight name alone.
+TIME_FONT = 'Ubuntu Sans Regular 11'
+HEADER_FONTS = {TITLE_FONT, ARTIST_FONT, LABEL_FONT, PLAIN_FONT, TIME_FONT}
+TEXT_FONTS = HEADER_FONTS | {LYRIC_FONT, MESSAGE_FONT}
 SKIP_SIZE, PLAY_SIZE, CONTROL_GAP = 14, 24, 12
 WINDOW_BUTTON_SIZE = 10                       # minimize / close icons, right of the heart
 WINDOW_BUTTON_PITCH = 22                      # centre to centre, and each one's hit width
 HEART_PITCH = 25                              # heart centre to minimize centre
 HEART_WIDTH = 16                              # the heart draw.lua strokes, as wide as HEART_FONT's ♡
-LYRIC_ROWS = 3
 LIKE_POLL_SECONDS = 30
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
+NO_ART_WAIT = 3                               # s a track with a length waits for art before the placeholder
 
 _pango = PangoCairo.FontMap.get_default().create_context()
 PangoCairo.context_set_resolution(_pango, 96)
 
+# The user's size settings, read on every render, and the text scale beside the artwork.
+widget_width, lyrics_height, text_scale = size_file.DEFAULTS
+header_scale = text_scale
 
-def wrap(text, font, width=COLUMN_WIDTH, max_lines=3):
+
+def sized(font):
+    """The font at the text scale, if it is text: 'Ubuntu Sans Bold 17' at 1.5 ->
+    'Ubuntu Sans Bold 25.5'."""
+    if font not in TEXT_FONTS:
+        return font
+    *name, pt = font.split()
+    return f"{' '.join(name)} {float(pt) * scale_of(font):g}"
+
+
+def scale_of(font):
+    return header_scale if font in HEADER_FONTS else text_scale if font in TEXT_FONTS else 1
+
+
+def font_description(font):
+    return Pango.FontDescription.from_string(sized(font))
+
+
+def wrap(text, font, width=None, max_lines=3):
+    if width is None:
+        width = widget_width - COLUMN_X - 4        # the text column
     layout = Pango.Layout.new(_pango)
-    layout.set_font_description(Pango.FontDescription.from_string(font))
-    layout.set_width(width * Pango.SCALE)
+    layout.set_font_description(font_description(font))
+    layout.set_width(round(width * Pango.SCALE))
     layout.set_wrap(Pango.WrapMode.WORD_CHAR)
     layout.set_text(text, -1)
     raw = text.encode()
@@ -81,8 +116,8 @@ def esc(text):
 
 
 def conky_font(pango_font):
-    """'Ubuntu Sans Bold 17' -> 'Ubuntu Sans:bold:size=17'"""
-    *name, size = pango_font.split()
+    """'Ubuntu Sans Bold 17' -> 'Ubuntu Sans:bold:size=17', at the text scale"""
+    *name, size = sized(pango_font).split()
     bold = 'Bold' in name
     name = ' '.join(n for n in name if n != 'Bold')
     return f"{name}{':bold' if bold else ''}:size={size}"
@@ -265,7 +300,7 @@ def fmt_time(sec):
 
 def text_width(text, font):
     layout = Pango.Layout.new(_pango)
-    layout.set_font_description(Pango.FontDescription.from_string(font))
+    layout.set_font_description(font_description(font))
     layout.set_text(text, -1)
     return layout.get_pixel_size()[0]
 
@@ -286,21 +321,23 @@ def write_atomic(path, text):
 
 
 def font_ascent(font):
-    return _pango.get_metrics(Pango.FontDescription.from_string(font), None).get_ascent() / Pango.SCALE
+    return _pango.get_metrics(font_description(font), None).get_ascent() / Pango.SCALE
 
 
 def ink_extents(text, font):
+    """(top, height) of the text's ink, from the top of its line"""
     layout = Pango.Layout.new(_pango)
-    layout.set_font_description(Pango.FontDescription.from_string(font))
+    layout.set_font_description(font_description(font))
     layout.set_text(text, -1)
-    return layout.get_pixel_extents()[0]
+    ink = layout.get_pixel_extents()[0]
+    return ink.y, ink.height
 
 
 def line_height(*fonts):
     """Conky's height for a line: the tallest font's ascent + descent."""
     heights = []
     for font in fonts:
-        m = _pango.get_metrics(Pango.FontDescription.from_string(font), None)
+        m = _pango.get_metrics(font_description(font), None)
         heights.append((m.get_ascent() + m.get_descent()) / Pango.SCALE)
     return max(heights)
 
@@ -310,18 +347,43 @@ def write_regions(regions):
     write_atomic(REGIONS, json.dumps(regions))
 
 
-@functools.cache                                  # fonts and constants only
-def top_buttons():
+def controls_mid(total):
+    """How far below the controls row's top its buttons and bar sit: on the line through the
+    middle of 11 pt digits, the way they were placed when conky drew the times (it draws a
+    row's baseline at the row's bottom, measured from a capture). Measured at the text scale
+    and scaled back, so the row does not move with the text."""
+    ink_y, ink_h = ink_extents(total, TIME_FONT)
+    k = scale_of(TIME_FONT)
+    ink_bottom = (ink_y + ink_h - font_ascent(TIME_FONT)) / k      # below the baseline, ~0
+    return line_height(CONTROL_ROW_FONT) + ink_bottom - ink_h / k / 2 + 0.75   # + stroke rounding
+
+
+@functools.cache                                  # fonts, constants and the text scale only
+def header_scale_for(scale):
+    """The text scale for the label, title and artist: `scale`, or as much of it as still
+    fits the label row and a line each of title and artist above the controls, in steps of
+    0.05, so a larger text scale alone doesn't push the controls below the artwork."""
+    global header_scale
+    fits = ART_BOTTOM - PLAY_SIZE / 2 - controls_mid('0:00') - TOP_ROW
+    header_scale = scale
+    while header_scale > 1 and (line_height(LABEL_FONT, HEART_FONT, PLAIN_FONT)
+                                + line_height(TITLE_FONT) + line_height(ARTIST_FONT)) > fits:
+        header_scale = round(header_scale - 0.05, 2)
+    return header_scale
+
+
+@functools.cache                                  # fonts, constants and the widget settings only
+def top_buttons(_width, _header_scale):
     """The heart, minimize and close on the top row: their centres (x), the shared centre
     line (y), and the click regions for minimize and close."""
-    close_cx = MARGIN + TEXT_WIDTH - WINDOW_BUTTON_SIZE / 2
+    close_cx = MARGIN + widget_width - WINDOW_BUTTON_SIZE / 2
     min_cx = close_cx - WINDOW_BUTTON_PITCH
     heart_cx = min_cx - HEART_PITCH
     # Centred on HEART_FONT's ♡ ink in the top row, whose height that font sets; conky puts
     # the row's baseline at its bottom (measured).
-    ink = ink_extents('♡', HEART_FONT)
-    cy = (MARGIN - LABEL_LIFT + line_height(LABEL_FONT, HEART_FONT) - font_ascent(HEART_FONT)
-          + ink.y + ink.height / 2)
+    ink_y, ink_h = ink_extents('♡', HEART_FONT)
+    cy = (TOP_ROW + line_height(LABEL_FONT, HEART_FONT) - font_ascent(HEART_FONT)
+          + ink_y + ink_h / 2)
     half = WINDOW_BUTTON_PITCH / 2
     regions = {
         'minimize': [min_cx - half, cy - half, min_cx + half, cy + half],
@@ -330,20 +392,71 @@ def top_buttons():
     return heart_cx, min_cx, close_cx, cy, regions
 
 
+def plain():
+    """Ends a run of text in a font of its own. Not a bare ${font}: that would go back to
+    conky.conf's default, which is tiny because the config can't follow the text scale,
+    and conky counts that font into the line's height and baseline. The offsets measured
+    above were measured with this font there."""
+    return f"${{font {conky_font(PLAIN_FONT)}}}"
+
+
+# Vertical gaps are tiny lines of their own, each ending in a ${voffset}: conky counts a
+# voffset into its window's height only after a line's fonts, and one ending a line of text
+# draws that text lower too.
+
+def gap(space, end='', after_text=True):
+    """A tiny line taking `space` of height in all; `end` goes before its voffset. A line
+    starts in the font the one before it ended in, which conky counts into its height: a
+    line of text ends in plain()'s; the first line starts in conky.conf's tiny default, and
+    the controls row ends in the tiny spacer font."""
+    starts = line_height(PLAIN_FONT) if after_text else SPACER_HEIGHT
+    return f"${{font {conky_font(SPACER_FONT)}}} {end}${{voffset {round(space - starts)}}}"
+
+
+def first_line(next_top, before=''):
+    """The widget's top line: it makes conky's window the widget's width (a goto only counts
+    on a line with another after it) and starts the next line at next_top."""
+    return before + gap(next_top, f"${{goto {2 * MARGIN + widget_width}}}", after_text=False)
+
+
+def last_gap(y, bottom):
+    """The last line, ending the window at the widget's bottom."""
+    return gap(bottom - y, after_text=False)
+
+
+def draw_basics():
+    """draw.txt's lines for every screen: the scales (display; lyrics' text; the header's
+    and times' text) and the window buttons."""
+    _, min_cx, close_cx, top_cy, _ = top_buttons(widget_width, header_scale)
+    return [f'scale {SCALE} {text_scale:g} {header_scale:g}',
+            f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}']
+
+
+def message(text):
+    """A line of text where the track would be, the widget keeping its size and margins.
+    draw.txt keeps only the scale and the window buttons, so nothing of the last track is
+    drawn over it."""
+    write_atomic(DRAW, '\n'.join(draw_basics()) + '\n')
+    return '\n'.join((first_line(MARGIN),
+                      f"${{goto {MARGIN}}}${{color}}${{font {conky_font(MESSAGE_FONT)}}}{esc(text)}{plain()}",
+                      last_gap(MARGIN + line_height(MESSAGE_FONT, PLAIN_FONT), 2 * MARGIN + MIN_HEIGHT)))
+
+
 def render():
+    global widget_width, lyrics_height, text_scale, header_scale
+    widget_width, lyrics_height, text_scale = size_file.load()
+    header_scale = header_scale_for(text_scale)
     status = playerctl('status')
-    heart_cx, min_cx, close_cx, top_cy, top_regions = top_buttons()
-    window_line = f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}'
+    heart_cx, min_cx, _, top_cy, top_regions = top_buttons(widget_width, header_scale)
     if status not in ('Playing', 'Paused'):
         write_regions(top_regions)
-        write_atomic(DRAW, f'scale {SCALE}\n{window_line}\n')
-        return "${color}${font Ubuntu Sans:size=11}Spotify not playing${font}\n"
+        return message('Spotify not playing')
 
     meta = playerctl('metadata', '--format',
                      '{{mpris:trackid}}\t{{title}}\t{{artist}}\t{{album}}\t{{mpris:artUrl}}\t{{position}}\t{{mpris:length}}')
     parts = meta.split('\t')
     if len(parts) != 7:
-        return "${color}Loading…\n"
+        return message('Loading…')
     track_id, title, artist, album, art, pos_us, len_us = parts
     position = int(pos_us or 0) / 1e6
     duration = int(len_us or 0) / 1e6
@@ -365,9 +478,16 @@ def render():
         if settled and state.lyrics_key != lyrics_key:
             state.lyrics_key, state.lyrics = lyrics_key, None
             fetch_lyrics_now = True
-        if settled and art and art != state.cover_url:
+        # Spotify's DJ talks in clips with no length, which get it at once; a song whose
+        # art is only late waits a while longer.
+        no_art = not art and now - state.track_since >= (NO_ART_WAIT if duration else METADATA_SETTLE)
+        if no_art:
+            art = NO_ART_URL
+        if (settled or no_art) and art and art != state.cover_url:
             state.cover_url = art
             fetch_cover_now = True
+            if no_art:
+                log(f'no artwork: {title!r} by {artist!r} ({track_id}), showing the placeholder')
         poll_like = new_track or now - state.liked_checked > LIKE_POLL_SECONDS
         if poll_like:
             state.liked_checked = now
@@ -388,68 +508,68 @@ def render():
     heart_box = [heart_cx - heart_size / 2 - 8, MARGIN - 8, min_cx - WINDOW_BUTTON_PITCH / 2,
                  MARGIN + heart_size + 6]
 
+    total = fmt_time(duration)                # measured for the bar; draw.lua draws both times
+    mid_offset = controls_mid(total)
+    row = line_height(CONTROL_ROW_FONT)
     g = f'${{goto {COLUMN_X}}}'
-    # Running top of the current line, to place what draw.lua draws. The first line is
-    # lifted so the label's cap height lines up with the top of the artwork (measured).
-    y = MARGIN - LABEL_LIFT
-    out = [f"${{image {COVER} -p 0,0 -s 118x118 -n}}${{voffset -{LABEL_LIFT}}}"
-           f"{g}${{color1}}${{font {conky_font(LABEL_FONT)}}}NOW PLAYING${{font}}"
-           f"${{font {conky_font(HEART_FONT)}}} ${{font}}"]   # the heart font sets the row height
-    y += line_height(LABEL_FONT, HEART_FONT)
-    for line in wrap(title, TITLE_FONT):
-        out.append(f"{g}${{color2}}${{font {conky_font(TITLE_FONT)}}}{esc(line)}${{font}}")
-        y += line_height(TITLE_FONT)
-    for line in wrap(artist, ARTIST_FONT, max_lines=2):
-        out.append(f"{g}${{color}}${{font {conky_font(ARTIST_FONT)}}}{esc(line)}${{font}}")
-        y += line_height(ARTIST_FONT)
+    # Running top of the current line, to place what draw.lua draws.
+    y = TOP_ROW
+    out = [first_line(y, f"${{image {COVER} -p {MARGIN},{MARGIN} -s 118x118 -n}}"),
+           # Only reserved: draw.lua draws NOW PLAYING, its capitals level with the artwork's top.
+           f"{g}${{font {conky_font(LABEL_FONT)}}} ${{font {conky_font(HEART_FONT)}}} {plain()}"]
+    y += line_height(LABEL_FONT, HEART_FONT, PLAIN_FONT)   # plain() ends it, and counts once text grows
     # Controls row, Spotify-style: ⏮ ▶ ⏭ (drawn by draw.lua), elapsed, seek bar, total.
-    row = line_height(CONTROL_ROW_FONT, TIME_FONT)
-    elapsed, total = fmt_time(position), fmt_time(duration)
     prev_cx = COLUMN_X + SKIP_SIZE / 2
     play_cx = prev_cx + SKIP_SIZE / 2 + CONTROL_GAP + PLAY_SIZE / 2
     next_cx = play_cx + PLAY_SIZE / 2 + CONTROL_GAP + SKIP_SIZE / 2
-    time_x = round(next_cx + SKIP_SIZE / 2 + CONTROL_GAP + 4)
-    # Centre the bar and buttons on the timestamps' digits. Conky draws the row's baseline
-    # at the bottom of the row (measured from a capture); the digits' ink ends there.
-    ink = ink_extents(total, TIME_FONT)
-    ink_bottom = ink.y + ink.height - font_ascent(TIME_FONT)   # relative to the baseline, ~0
-    mid_offset = row + ink_bottom - ink.height / 2 + 0.75     # + stroke rounding, measured
-    # Push the row down so the play button's bottom meets the artwork's bottom, when the
-    # title/artist leave room for that.
-    push = max(0, round(ART_BOTTOM - PLAY_SIZE / 2 - (y + mid_offset)))
-    y += push
-    mid_y = y + mid_offset
-    out.append(f"${{voffset {push}}}{g}${{font {conky_font(CONTROL_ROW_FONT)}}} ${{font}}"   # reserves the row height
-               f"${{goto {time_x}}}${{voffset {TIME_DROP}}}${{color}}${{font {conky_font(TIME_FONT)}}}{elapsed}"
-               f"${{alignr}}{total}${{font}}${{voffset -{TIME_DROP}}}")
+    time_x = next_cx + SKIP_SIZE / 2 + CONTROL_GAP + 4
+    for line in wrap(title, TITLE_FONT):
+        out.append(f"{g}${{color2}}${{font {conky_font(TITLE_FONT)}}}{esc(line)}{plain()}")
+        y += line_height(TITLE_FONT)
+    for line in wrap(artist, ARTIST_FONT, max_lines=2):
+        out.append(f"{g}${{color}}${{font {conky_font(ARTIST_FONT)}}}{esc(line)}{plain()}")
+        y += line_height(ARTIST_FONT)
+    # The play button's bottom meets the artwork's bottom, unless a title or artist wrapped
+    # onto more lines than fit beside it: then the row, and the widget with it, moves down.
+    # A line each of title and artist always fits (see header_scale_for), so the text scale
+    # moves it only when larger text makes the title or artist wrap.
+    mid_y = max(ART_BOTTOM - PLAY_SIZE / 2, y + mid_offset)
+    out.append(gap(mid_y - mid_offset - y))
+    y = mid_y - mid_offset
     time_w = text_width(total, TIME_FONT)      # elapsed never has more digits than total
+    # The row is only reserved here; draw.lua draws the times, centred on the bar like the
+    # buttons. It ends in the tiny font rather than plain(), whose size follows the text.
+    out.append(f"{g}${{font {conky_font(CONTROL_ROW_FONT)}}} ${{font {conky_font(SPACER_FONT)}}}")
     bar_x0 = time_x + time_w + 10
-    bar_x1 = MARGIN + TEXT_WIDTH - time_w - 10
+    bar_x1 = MARGIN + widget_width - time_w - 10
     fraction = min(max(position / duration, 0), 1) if duration else 0
     y += row
+    lyr_version = write_lyrics(track_id, duration)
+    lyrics_top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
+    if lyr_version:
+        bottom = lyrics_top + lyrics_height - BOTTOM_TRIM + MARGIN
+    else:
+        bottom = max(y, MARGIN + MIN_HEIGHT) + MARGIN
 
-    draw = [f'scale {SCALE}',
+    draw = [*draw_basics(),
             f'bar {bar_x0} {bar_x1} {mid_y + BAR_DROP} {fraction:.4f} {duration:.3f}',
             f'controls {prev_cx} {play_cx} {next_cx} {mid_y} {SKIP_SIZE} {PLAY_SIZE} {int(status == "Playing")}',
+            f'times {time_x} {MARGIN + widget_width} {mid_y + BAR_DROP}',
             f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}',
-            window_line,
-            f'heart {heart_cx} {top_cy} {HEART_WIDTH} {heart_state} ' + ' '.join(map(str, heart_box))]
-    lyr_version = write_lyrics(track_id, duration)
+            f'heart {heart_cx} {top_cy} {HEART_WIDTH} {heart_state} ' + ' '.join(map(str, heart_box)),
+            f'label {COLUMN_X} {ART_TOP}']
     if lyr_version:
-        # Full width under the artwork and controls: reserve LYRIC_ROWS rows there, and
-        # draw.lua draws and scrolls the lyrics inside them.
-        lyric_row = line_height(LYRIC_FONT) + LYRIC_SPACING
-        top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
-        gap = round(top - y)
-        # One tiny spacer line, pushed down so the text ends where the lyric rows end
-        # (minus the bottom trim); blank lyric-font lines leave extra slack instead.
-        push = round(gap + LYRIC_ROWS * lyric_row - SPACER_HEIGHT - BOTTOM_TRIM)
-        out.append(f"${{voffset {push}}}${{font {conky_font(SPACER_FONT)}}} ${{font}}")
-        draw.append(f'lyrics {ART_LEFT} {MARGIN + TEXT_WIDTH} {y + gap} {lyric_row} {lyr_version}')
+        # Full width under the artwork and controls: reserve lyrics_height there, and
+        # draw.lua draws and scrolls as many lines as fit inside it.
+        lyric_row = line_height(LYRIC_FONT) + LYRIC_SPACING * text_scale
+        draw.append(f'lyrics {ART_LEFT} {MARGIN + widget_width} {lyrics_top} {lyric_row} '
+                    f'{lyr_version} {lyrics_height}')
+    out.append(last_gap(y, bottom))            # the lyrics and the bottom margin
     write_atomic(DRAW, '\n'.join(draw) + '\n')
 
     half = PLAY_SIZE / 2 + 4
     write_regions({
+        'lyrics': bool(lyr_version),            # the top and bottom edges resize only these
         **top_regions,
         # a little padding around each target makes them easier to hit
         'prev': [prev_cx - SKIP_SIZE / 2 - 5, mid_y - half, prev_cx + SKIP_SIZE / 2 + 5, mid_y + half],
@@ -470,10 +590,10 @@ def write_lyrics(track_id, duration):
     if not lines:
         return None
     if lines[0][0] > 0:
-        lines.insert(0, (0.0, ''))               # before the first line: show the intro as ♪
+        lines.insert(0, (0.0, ''))               # before the first line: show the intro as ♫
     version = f'{abs(hash((track_id, len(lines)))) % 10**8}'
     if state.lyrics_written != version:
-        body = '\n'.join(f'{t:.2f}\t{l or "♪"}' for t, l in lines)
+        body = '\n'.join(f'{t:.2f}\t{l or "♫"}' for t, l in lines)   # instrumental: a double note
         write_atomic(LYRICS, f'synced\n{body}\n')
         state.lyrics_written = version
     return version
@@ -500,11 +620,20 @@ def main():
         try:
             text = render()
         except Exception as e:
-            text = f"${{color}}widget error: {esc(str(e))[:60]}\n"
+            try:
+                text = message(f'widget error: {str(e)[:60]}')
+            except Exception:                   # the layout itself is what failed
+                text = f"${{color}}${{font Ubuntu Sans:size=11}}widget error: {esc(str(e))[:60]}\n"
+
         with open(OUT + '.tmp', 'w') as f:
             f.write(text)
         os.replace(OUT + '.tmp', OUT)
-        time.sleep(0.25)
+        # Every 0.25 s, or at once when the size settings change.
+        settings = size_file.load()
+        for _ in range(5):
+            time.sleep(0.05)
+            if size_file.load() != settings:
+                break
 
 
 if __name__ == '__main__':
