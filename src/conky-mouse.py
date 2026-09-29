@@ -13,8 +13,8 @@ helper subscribes to clicks on conky's window itself:
     shows the new size while the button is held; on release it is saved (widget_size.py)
   - anywhere else: drag the widget; the position is saved on release
   - the mouse wheel over static lyrics (plain ones, which have no timing to follow, or
-    synced ones under the tray menu's Static): scroll them a line at a time. draw.lua reads the offset from lyrics-scroll. The wheel does nothing
-    anywhere else.
+    synced ones under the tray menu's Static): scroll them a line at a time. draw.lua reads
+    the offset from lyrics-scroll. The wheel does nothing anywhere else.
 
 Hit areas come from nowplaying.py (regions.json, logical px, window-relative), since the
 controls move when titles wrap.
