@@ -12,6 +12,9 @@ helper subscribes to clicks on conky's window itself:
     edge the height of the lyrics, and a corner both; the text keeps its size. An outline
     shows the new size while the button is held; on release it is saved (widget_size.py)
   - anywhere else: drag the widget; the position is saved on release
+  - the mouse wheel over plain lyrics (static, with no timing to follow): scroll them a
+    line at a time. draw.lua reads the offset from lyrics-scroll. The wheel does nothing
+    anywhere else.
 
 Hit areas come from nowplaying.py (regions.json, logical px, window-relative), since the
 controls move when titles wrap.
@@ -42,11 +45,13 @@ POSITION = os.path.join(CONF, 'position')
 CACHE = os.path.expanduser('~/.cache/conky-spotify-nowplaying')
 REGIONS = os.path.join(CACHE, 'regions.json')
 SEEK_PREVIEW = os.path.join(CACHE, 'seek-preview')
+LYRICS_SCROLL = os.path.join(CACHE, 'lyrics-scroll')   # '<lyrics version> <line offset>', for draw.lua
 LOG = os.path.join(CACHE, 'mouse.log')
 HIDDEN = os.path.join(CACHE, 'hidden')
 ON_TOP = os.path.join(CONF, 'on-top')             # 'off': not always on top
 LAUNCHER = os.environ.get('CSN_LAUNCHER') or 'conky-spotify-nowplaying'
 BUTTON_PRESS, MOTION_NOTIFY, BUTTON1_MASK = 4, 6, 1 << 8
+WHEEL_UP, WHEEL_DOWN = 4, 5                       # X reports the wheel as button presses
 BUTTON_PRESS_MASK, BUTTON_RELEASE_MASK, POINTER_MOTION_MASK = 1 << 2, 1 << 3, 1 << 6
 CLIENT_MESSAGE, SUBSTRUCTURE_NOTIFY_MASK, SUBSTRUCTURE_REDIRECT_MASK = 33, 1 << 19, 1 << 20
 CW_BACK_PIXMAP, CW_BACK_PIXEL, CW_BORDER_PIXEL = 1 << 0, 1 << 1, 1 << 3
@@ -459,6 +464,27 @@ def region_at(regions, s, x, y):
     return None
 
 
+def scroll_lyrics(regions, s, x, y, down):
+    """Moves static lyrics under window-relative (x, y) a line down or up, between their
+    first line at the top and their last at the bottom. Returns the new offset, or None
+    when (x, y) is not over lyrics the wheel scrolls."""
+    area, static = regions.get('lyrics'), regions.get('lyrics_scroll')
+    if not (area and static and area[0] * s <= x <= area[2] * s and area[1] * s <= y <= area[3] * s):
+        return None
+    version, last = static
+    try:
+        with open(LYRICS_SCROLL) as f:
+            shown, offset = f.read().split()
+        offset = int(offset) if shown == version else 0     # other lyrics: from the top
+    except (OSError, ValueError):
+        offset = 0
+    offset = min(max(offset + (1 if down else -1), 0), last)
+    with open(LYRICS_SCROLL + '.tmp', 'w') as f:
+        f.write(f'{version} {offset}')
+    os.replace(LYRICS_SCROLL + '.tmp', LYRICS_SCROLL)
+    return offset
+
+
 def seek(d, root, win, regions, s):
     """Follow the pointer along the bar (draw.lua shows the preview), seek on release."""
     bx0, bx1 = regions['bar']
@@ -551,6 +577,8 @@ def main():
                 if edges != cursor:
                     set_cursor(d, win, edges)
                     cursor = edges
+            elif ev.type == BUTTON_PRESS and b.button in (WHEEL_UP, WHEEL_DOWN) and b.window == win:
+                scroll_lyrics(load_regions(), s, b.x, b.y, b.button == WHEEL_DOWN)
             elif ev.type == BUTTON_PRESS and b.button == 1 and b.window == win:
                 s = scale()
                 regions = load_regions()

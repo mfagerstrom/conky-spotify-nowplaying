@@ -10,11 +10,12 @@ which conky.conf renders with ${execpi}. It covers:
     regions for conky-mouse.py go to regions.json
   - the heart, minimize and close buttons at the top right (drawn by draw.lua)
   - like state (heart), via spotify_api.py; refreshed on track change and every 10 s
-  - synced lyrics from LRCLIB (lrclib.net) -> lyrics.txt; draw.lua scrolls them smoothly
-    (previous / current / next line). Tracks with only unsynced lyrics show none. Each
-    answer is cached on disk per track (lyrics/), so a track played again is not looked up.
+  - lyrics from LRCLIB (lrclib.net) -> lyrics.txt. draw.lua scrolls synced ones smoothly
+    along with playback (previous / current / next line); plain ones, for a track LRCLIB
+    has no synced lyrics for, are a static block the mouse wheel scrolls. Each answer is
+    cached on disk per track (lyrics/), so a track played again is not looked up.
 """
-import functools, hashlib, json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
+import functools, hashlib, json, math, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
 import gi
 gi.require_version('Pango', '1.0'); gi.require_version('PangoCairo', '1.0'); gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Pango, PangoCairo
@@ -33,8 +34,10 @@ REGIONS = os.path.join(CACHE, 'regions.json')
 LOG = os.path.join(CACHE, 'nowplaying.log')
 BG = os.path.join(CACHE, 'bg.txt')               # background colour from the album art, for draw.lua
 DRAW = os.path.join(CACHE, 'draw.txt')           # geometry + playback clock for draw.lua
-LYRICS = os.path.join(CACHE, 'lyrics.txt')       # timed lyric lines for draw.lua
+LYRICS = os.path.join(CACHE, 'lyrics.txt')       # lyric lines for draw.lua, timed when synced
+LYRICS_SCROLL = os.path.join(CACHE, 'lyrics-scroll')   # plain lyrics' wheel offset (conky-mouse.py)
 LYRICS_CACHE = os.path.join(CACHE, 'lyrics')     # one JSON file per track looked up on LRCLIB
+LYRICS_CACHE_FORMAT = 2                          # 2: plain lyrics are kept, not only synced ones
 LYRICS_CACHE_MAX = 2000                          # files kept; the least recently used go first
 NO_LYRICS_TTL = 7 * 24 * 3600                    # LRCLIB gains lyrics, so "none" is asked again
 
@@ -137,7 +140,7 @@ class State:
         self.track = None          # mpris:trackid of the track the extras below belong to
         self.liked = None          # True / False / None (unknown or not logged in)
         self.liked_checked = 0.0
-        self.lyrics = None         # {'synced': [(sec, line)]}, or {} if there are no synced lyrics
+        self.lyrics = None         # {'synced': [(sec, line)]}, {'plain': [line]}, or {} for none
         self.lyrics_retry = None   # time to retry a lyrics fetch that hit a network error
         self.lyrics_key = None     # (track, title, artist, album, length) the lyrics are for / being fetched for
         self.cover_url = None      # art URL last requested
@@ -265,18 +268,22 @@ def lyrics_cache_path(key):
 
 def read_cached_lyrics(key):
     """The cached lyrics for key as fetch_lyrics would set them, or None when there is no
-    usable entry: none at all, unreadable, or an expired "no synced lyrics" answer."""
+    usable entry: none at all, unreadable, or a "no lyrics" answer that has expired or
+    predates LYRICS_CACHE_FORMAT (an entry without a format kept only synced lyrics, so
+    its "none" may hide plain ones)."""
     path = lyrics_cache_path(key)
     try:
         with open(path) as f:
             entry = json.load(f)
         synced = [(float(sec), str(line)) for sec, line in entry['synced']]
-        if not synced and not 0 <= time.time() - entry['fetched'] <= NO_LYRICS_TTL:
+        plain = [str(line) for line in entry.get('plain', [])]
+        if not synced and not plain and (entry.get('format', 1) < LYRICS_CACHE_FORMAT
+                                         or not 0 <= time.time() - entry['fetched'] <= NO_LYRICS_TTL):
             return None                          # expired, or dated in the future by a clock change
         os.utime(path)                           # mark it used, for pruning
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return {'synced': synced} if synced else {}
+    return {'synced': synced} if synced else {'plain': plain} if plain else {}
 
 
 def cache_lyrics(key, lyrics):
@@ -285,7 +292,8 @@ def cache_lyrics(key, lyrics):
     try:
         os.makedirs(LYRICS_CACHE, exist_ok=True)
         write_atomic(lyrics_cache_path(key),
-                     json.dumps({'fetched': time.time(), 'synced': lyrics.get('synced', [])}))
+                     json.dumps({'format': LYRICS_CACHE_FORMAT, 'fetched': time.time(),
+                                 'synced': lyrics.get('synced', []), 'plain': lyrics.get('plain', [])}))
     except OSError as e:
         log(f'lyrics cache write failed: {type(e).__name__}: {e}')
         return
@@ -308,16 +316,46 @@ def cache_lyrics(key, lyrics):
             pass
 
 
+def closest(hits, duration):
+    """The search hit nearest Spotify's length: within 3 s if there is one, else within
+    20 s (a different edit of the song -- synced lines may drift a little, but lyrics that
+    drift beat no lyrics), else None."""
+    for tolerance in (3, 20):
+        close = [h for h in hits if abs((h.get('duration') or 0) - duration) <= tolerance]
+        if close:
+            return min(close, key=lambda h: abs(h['duration'] - duration))
+    return None
+
+
+def plain_lines(text):
+    """Plain lyrics as lines, blank ones kept between verses: one at most, none at the ends."""
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line or (lines and lines[-1]):
+            lines.append(line)
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines
+
+
+def lyrics_summary(lyrics):
+    """'12 synced lines', '30 plain lines' or 'none', for the log."""
+    kind = 'synced' if lyrics.get('synced') else 'plain' if lyrics.get('plain') else None
+    return f'{len(lyrics[kind])} {kind} lines' if kind else 'none'
+
+
 def fetch_lyrics(key):
-    """Synced lyrics only (unsynced ones aren't shown), from the cache when it has them.
-    Otherwise LRCLIB: exact match first (it wants whole seconds), then the closest-length
-    search hit with synced lyrics, and the answer is cached, "none" included.
-    Network errors leave state.lyrics as None so the next render retries, and are not cached."""
+    """The track's lyrics, from the cache when it has them. Otherwise LRCLIB: the exact
+    match (it wants whole seconds), then the closest-length search hit with synced lyrics.
+    Synced lyrics always win; plain ones are kept only when no synced version is close
+    enough: the exact match's, else the closest search hit's. The answer is cached, "none"
+    included. Network errors leave state.lyrics as None so the next render retries, and
+    are not cached."""
     track_id, title, artist, album, duration = key
     lyrics = read_cached_lyrics(key)
     if lyrics is not None:
-        log(f"lyrics: {len(lyrics.get('synced', []))} synced lines for {artist} - {title} "
-            f"({duration:.0f} s), from the cache")
+        log(f"lyrics: {lyrics_summary(lyrics)} for {artist} - {title} ({duration:.0f} s), from the cache")
         with state.lock:
             if state.lyrics_key == key:
                 state.lyrics = lyrics
@@ -325,20 +363,11 @@ def fetch_lyrics(key):
     try:
         record = _lrclib('get', artist_name=artist, track_name=title, album_name=album,
                          duration=int(duration))
-        if not record or not record.get('syncedLyrics'):
-            # Prefer a version within 3 s of Spotify's length; otherwise accept one within
-            # 20 s (a different edit of the song -- lines may drift a little, but lyrics
-            # that drift beat no lyrics).
-            hits = [h for h in (_lrclib('search', track_name=title, artist_name=artist) or [])
-                    if h.get('syncedLyrics')]
-            for tolerance in (3, 20):
-                close = [h for h in hits if abs((h.get('duration') or 0) - duration) <= tolerance]
-                if close:
-                    close.sort(key=lambda h: abs(h['duration'] - duration))
-                    record = close[0]
-                    break
-            else:
-                record = None
+        if not (record or {}).get('syncedLyrics'):
+            hits = _lrclib('search', track_name=title, artist_name=artist) or []
+            synced = closest([h for h in hits if h.get('syncedLyrics')], duration)
+            if synced or not (record or {}).get('plainLyrics'):
+                record = synced or closest([h for h in hits if h.get('plainLyrics')], duration)
     except Exception as e:
         log(f'lyrics lookup failed ({type(e).__name__}), retrying in 30 s: {artist} - {title}')
         with state.lock:
@@ -353,7 +382,9 @@ def fetch_lyrics(key):
             if m:
                 synced.append((int(m[1]) * 60 + float(m[2]), m[3].strip()))
         lyrics['synced'] = synced
-    log(f"lyrics: {len(lyrics.get('synced', []))} synced lines for {artist} - {title} ({duration:.0f} s)")
+    elif record and record.get('plainLyrics'):
+        lyrics['plain'] = plain_lines(record['plainLyrics'])
+    log(f'lyrics: {lyrics_summary(lyrics)} for {artist} - {title} ({duration:.0f} s)')
     cache_lyrics(key, lyrics)
     with state.lock:
         if state.lyrics_key == key:
@@ -629,9 +660,9 @@ def render():
     bar_x1 = MARGIN + widget_width - time_w - 10
     fraction = min(max(position / duration, 0), 1) if duration else 0
     y += row
-    lyr_version = write_lyrics(track_id, duration)
+    lyr = write_lyrics(track_id)
     lyrics_top = max(mid_y + PLAY_SIZE / 2, ART_BOTTOM) + LYRIC_GAP
-    if lyr_version:
+    if lyr:
         bottom = lyrics_top + lyrics_height - BOTTOM_TRIM + MARGIN
     else:
         bottom = max(y, MARGIN + MIN_HEIGHT) + MARGIN
@@ -643,18 +674,26 @@ def render():
             f'clock {time.monotonic():.3f} {position:.3f} {int(status == "Playing")}',
             f'heart {heart_cx} {top_cy} {HEART_WIDTH} {heart_state} ' + ' '.join(map(str, heart_box)),
             f'label {COLUMN_X} {ART_TOP}']
-    if lyr_version:
+    lyrics_area = lyrics_scroll = None
+    if lyr:
         # Full width under the artwork and controls: reserve lyrics_height there, and
         # draw.lua draws and scrolls as many lines as fit inside it.
+        version, count, static = lyr
         lyric_row = line_height(LYRIC_FONT) + LYRIC_SPACING * text_scale
         draw.append(f'lyrics {ART_LEFT} {MARGIN + widget_width} {lyrics_top} {lyric_row} '
-                    f'{lyr_version} {lyrics_height}')
+                    f'{version} {lyrics_height}')
+        lyrics_area = [ART_LEFT, lyrics_top, MARGIN + widget_width, lyrics_top + lyrics_height]
+        if static:
+            # The wheel's range, in lines: from the first line at the top to the last one
+            # at the bottom. draw.lua works the same limit out.
+            lyrics_scroll = [version, max(0, math.ceil(count - lyrics_height / lyric_row - 1e-3))]
     out.append(last_gap(y, bottom))            # the lyrics and the bottom margin
     write_atomic(DRAW, '\n'.join(draw) + '\n')
 
     half = PLAY_SIZE / 2 + 4
     write_regions({
-        'lyrics': bool(lyr_version),            # the top and bottom edges resize only these
+        'lyrics': lyrics_area,                  # the top and bottom edges resize only these
+        'lyrics_scroll': lyrics_scroll,         # [version, last offset] for the wheel; None: no wheel
         **top_regions,
         # a little padding around each target makes them easier to hit
         'prev': [prev_cx - SKIP_SIZE / 2 - 5, mid_y - half, prev_cx + SKIP_SIZE / 2 + 5, mid_y + half],
@@ -668,20 +707,35 @@ def render():
     return '\n'.join(out)   # no trailing newline: it would add an empty line at the bottom
 
 
-def write_lyrics(track_id, duration):
-    """Writes lyrics.txt for draw.lua when the track's lyrics change; returns a version
-    string (changes with the lyrics) or None when there are no lyrics to show."""
-    lines = list((state.lyrics or {}).get('synced') or [])
+def write_lyrics(track_id):
+    """Writes lyrics.txt for draw.lua when the track's lyrics change, and returns
+    (version, lines, static): a version string that changes with the lyrics, their number
+    of lines, and whether draw.lua shows them as a static block rather than following
+    playback. None when there are no lyrics to show.
+
+    Synced lyrics go under a 'synced' header as '<seconds>\\t<line>', plain ones under
+    'plain' as '\\t<line>'. Writing new lyrics puts a static block back at its top."""
+    lyrics = state.lyrics or {}
+    lines = list(lyrics.get('synced') or [])
+    if lines:
+        if lines[0][0] > 0:
+            lines.insert(0, (0.0, ''))           # before the first line: show the intro as ♫
+        mode, body = 'synced', '\n'.join(f'{t:.2f}\t{l or "♫"}' for t, l in lines)   # instrumental: ♫
+    else:
+        lines = lyrics.get('plain') or []
+        mode, body = 'plain', '\n'.join(f'\t{l}' for l in lines)
     if not lines:
+        state.lyrics_written = None              # the same lyrics coming back start at the top
         return None
-    if lines[0][0] > 0:
-        lines.insert(0, (0.0, ''))               # before the first line: show the intro as ♫
-    version = f'{abs(hash((track_id, len(lines)))) % 10**8}'
+    version = f'{abs(hash((track_id, mode, len(lines)))) % 10**8}'
     if state.lyrics_written != version:
-        body = '\n'.join(f'{t:.2f}\t{l or "♫"}' for t, l in lines)   # instrumental: a double note
-        write_atomic(LYRICS, f'synced\n{body}\n')
+        write_atomic(LYRICS, f'{mode}\n{body}\n')
+        try:
+            os.remove(LYRICS_SCROLL)
+        except OSError:
+            pass
         state.lyrics_written = version
-    return version
+    return version, len(lines), mode == 'plain'
 
 
 def library_loop():

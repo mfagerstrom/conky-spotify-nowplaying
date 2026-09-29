@@ -1,7 +1,9 @@
 -- Cairo drawing for the widget, fed by nowplaying.py:
 --   draw.txt      geometry (logical px) + a playback clock, rewritten 4x a second; its scale
 --                 line is the display's scale, the lyrics' text scale and the times'
---   lyrics.txt    timed lyric lines, rewritten when the track's lyrics change
+--   lyrics.txt    lyric lines, rewritten when the track's lyrics change: timed under a
+--                 'synced' header, untimed under 'plain'
+--   lyrics-scroll the plain lyrics' line offset, which conky-mouse.py sets with the wheel
 --   bg.txt        background colour picked from the album art
 --   seek-preview  fraction under the pointer while conky-mouse.py drags the seek bar
 -- conky redraws every update_interval (0.05 s); between draw.txt updates the playback
@@ -13,8 +15,8 @@ local cache = os.getenv('HOME') .. '/.cache/conky-spotify-nowplaying/'
 local hover_x, hover_y = -1, -1
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
 local clock = {stamp = nil, pos = 0, playing = false}
-local lyrics = {version = nil, lines = {}}
-local scroll = nil                        -- eased lyric scroll position (line index)
+local lyrics = {version = nil, lines = {}, plain = false}
+local scroll = nil                        -- eased lyric scroll position (line index, or offset)
 
 local function read(name)
     local f = io.open(cache .. name)
@@ -43,8 +45,8 @@ local function load_lyrics(version)
     if version == lyrics.version then return end
     local text = read('lyrics.txt') or ''
     local lines = {}
-    for t, l in text:gmatch('\n([%d%.]+)\t([^\n]*)') do lines[#lines + 1] = {tonumber(t), l} end
-    lyrics = {version = version, lines = lines}
+    for t, l in text:gmatch('\n([%d%.]*)\t([^\n]*)') do lines[#lines + 1] = {tonumber(t), l} end
+    lyrics = {version = version, lines = lines, plain = text:match('^plain\n') ~= nil}
     scroll = nil
 end
 
@@ -329,6 +331,41 @@ local function draw_lyrics(cr, l, s, text, pos)
     cairo_restore(cr)
 end
 
+local function plain_offset(last)
+    -- the line conky-mouse.py has scrolled these lyrics to; 0 (the top) until it has
+    local v, offset = (read('lyrics-scroll') or ''):match('^(%S+) (%S+)')
+    if tonumber(v) ~= lyrics.version then return 0 end
+    return math.min(math.max(tonumber(offset) or 0, 0), last)
+end
+
+local function draw_plain_lyrics(cr, l, s, text)
+    -- A static block from the first line down, which only the mouse wheel moves: every line
+    -- alike (11 pt, regular, full white), no current line and no fade at the edges.
+    local x0, x1, top, row, height = l[1] * s, l[2] * s, l[3] * s, l[4] * s, l[6] * s
+    local rows = height / row
+    local lines = lyrics.lines
+    if #lines == 0 then return end
+    -- the last offset shows the last line at the bottom; nowplaying.py gives conky-mouse.py
+    -- the same limit
+    local target = plain_offset(math.max(0, math.ceil(#lines - rows - 1e-3)))
+    if scroll == nil then scroll = target end
+    scroll = scroll + (target - scroll) * (1 - math.exp(-dt() * 12 / 1.1))   -- ~0.33 s glide
+
+    cairo_save(cr)
+    cairo_rectangle(cr, x0, top, x1 - x0, height)
+    cairo_clip(cr)
+    cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
+    cairo_set_font_size(cr, 11 * text * 96 / 72 * s)
+    cairo_set_source_rgba(cr, 1, 1, 1, 1)
+    local first = math.max(1, math.floor(scroll) + 1)
+    for i = first, math.min(#lines, first + math.ceil(rows)) do
+        local y = top + (i - 1 - scroll + 0.5) * row                       -- the row's middle
+        cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row
+        show_text_with_notes(cr, ellipsize(cr, lines[i][2], x1 - x0), false)
+    end
+    cairo_restore(cr)
+end
+
 function conky_draw_bar()
     if conky_window == nil then return end
     local d = load_draw()
@@ -353,7 +390,13 @@ function conky_draw_bar()
         if d.times then draw_times(cr, d.times, s, times_text, clock.pos, d.bar[5]) end
         if d.lyrics then
             load_lyrics(d.lyrics[5])
-            draw_lyrics(cr, d.lyrics, s, text, clock.pos)
+            if lyrics.plain then
+                draw_plain_lyrics(cr, d.lyrics, s, text)
+            else
+                draw_lyrics(cr, d.lyrics, s, text, clock.pos)
+            end
+        else
+            scroll = nil                            -- lyrics coming back start over
         end
     end)
 end
