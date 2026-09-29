@@ -509,19 +509,17 @@ def main():
                 win = current
                 above = None                           # sent again below; a no-op if it held
                 x11.XSelectInput(d, win, BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK)
-                saved, target = load_position(), None
-                if saved:
-                    x, y, w, h = geometry(d, win)
-                    target = clamp_to_monitor(*saved, w, h)
-                    if (x, y) != target:
-                        x11.XMoveWindow(d, win, *target)
+                saved = load_position()
+                x, y, w, h = geometry(d, win)
+                target = clamp_to_monitor(*saved, w, h) if saved else (x, y)
+                if (x, y) != target:
+                    x11.XMoveWindow(d, win, *target)
                 # Unmapped again every second while hidden, since a conky reload maps it.
                 hide = os.path.exists(HIDDEN)
                 if hide:
                     x11.XUnmapWindow(d, win)
                 elif hidden is not False:              # a no-op when already mapped
-                    if target:
-                        hint_position(d, win, *target)
+                    hint_position(d, win, *target)
                     x11.XMapWindow(d, win)
                     above = None                       # the window manager forgets it when unmapped
                     if hidden:
