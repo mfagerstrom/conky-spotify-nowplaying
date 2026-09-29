@@ -34,7 +34,7 @@ tested on. On another release you can try the latest `.deb` from the
 reports any dependency that release lacks, and a `.deb` installed this way does not update itself:
 
 ```sh
-sudo apt install ./conky-spotify-nowplaying_1.3.0_all.deb
+sudo apt install ./conky-spotify-nowplaying_1.3.1_all.deb
 ```
 
 Then open **Spotify Now Playing** from the app grid. Opening it again stops the widget, or
