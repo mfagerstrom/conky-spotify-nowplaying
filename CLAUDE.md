@@ -2,7 +2,9 @@
 
 Every session files itself in the Code tab sidebar under `Blocked`, `Working`,
 `Tests Running`, `Self Review`, `Needs Review`, or `Completed` as its task
-moves along. The moves are in `.claude/skills/_shared/sidebar-groups.md`.
+moves along. The moves are in `.claude/skills/_shared/sidebar-groups.md`, and
+a Stop hook sends a turn back once when the session is not filed where they
+say.
 
 Everything a session waits on (a Launchpad build, a pull request merge, a
 blocking issue) goes through `scripts/catchup.py` with one watcher per session.

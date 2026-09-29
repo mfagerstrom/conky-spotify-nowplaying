@@ -16,6 +16,7 @@ before `/release` builds.
 ```bash
 python3 -m py_compile src/*.py bin/conky-spotify-nowplaying scripts/*.py
 python3 scripts/catchup_test.py
+python3 scripts/enforce_sidebar_move_test.py
 python3 -m unittest discover -s tests
 luac5.3 -p src/draw.lua src/conky.conf
 sh -n build-deb.sh release-ppa.sh
@@ -23,7 +24,7 @@ desktop-file-validate packaging/conky-spotify-nowplaying.desktop
 ```
 
 Every command must exit 0 and print nothing, apart from the test summaries
-`catchup_test.py` and `unittest` print.
+`catchup_test.py`, `enforce_sidebar_move_test.py` and `unittest` print.
 
 - `desktop-file-validate` hints count as failures to fix. It once caught a
   duplicate main category that every other check passed.

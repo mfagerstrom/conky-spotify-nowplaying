@@ -118,9 +118,43 @@ A session with anything of its own still open files by that instead, and
 
 - Look the group up by name with `mcp__ccd_sidebar__list_groups` before each
   move, and create a missing one with `mcp__ccd_sidebar__create_group` under
-  the exact name above. Ids are not stored anywhere.
+  the exact name above. Ids are never written into a skill or a script; the
+  Stop hook below keeps its own cache of them.
 - Custom groups only show when the sidebar is grouped by `custom`. The session
   never changes the view itself.
 - A subagent does not move sessions. The session that spawned it moves itself.
 - A sidebar tool that fails or is not loaded is reported in one line and
-  skipped. The groups are a convenience, never a gate on any step.
+  skipped. The groups are a convenience, never a gate on any step. The Stop
+  hook below sends a turn back once at most, so a move that cannot be made
+  does not hold the session.
+
+## The Stop hook
+
+`scripts/enforce_sidebar_move.py`, run from `.claude/settings.json`, holds a
+turn open until the session is filed where the turn's latest milestone puts
+it. It reads the transcript since the last prompt the user typed, and counts
+a milestone only when its command's output shows it ran:
+
+| Milestone                                                  | Group                                   |
+| ---------------------------------------------------------- | --------------------------------------- |
+| `gh issue edit --add-label "In Progress"` printed the URL  | `Working` or `Needs Review`             |
+| `gh pr create` printed the pull request URL                | `Needs Review`                          |
+| `catchup.py add-issue` printed `waiting for close:`        | `Blocked` or `Needs Review`             |
+| `catchup.py add-lp` printed `waiting:`                     | `Tests Running`                         |
+| `sidebar: no Launchpad builds open` from `check` or `wait` | `Working`, `Needs Review` or `Completed` |
+| `pr: <n> merged` or `closed` from `wait`                   | `Completed` or `Working`                |
+
+With another pull request still open in the ledger, a close or a settled
+build calls for `Working` or `Needs Review` instead of `Completed`, and a
+Launchpad build still open adds `Tests Running`. A turn with no milestone
+that ends with a build open in the ledger calls for `Tests Running`, and one
+with a pull request open calls for `Needs Review`. A turn that ends under
+`Self Review` stopped inside the loop, which only ends a turn on a question,
+filed under `Needs Review`.
+
+A wrong or missing group blocks the stop with a reason naming the group. A
+stop that a block already sent back goes through, so the hook never loops.
+Group ids resolve to names from `list_groups` results in the transcript and
+from `~/.cache/claude-sidebar/groups.json`, which a `PostToolUse` hook on
+`list_groups` keeps. Ids are app-wide, so the cache is shared by every
+repository.
