@@ -173,20 +173,51 @@ def is_liked(uri):
 
 # Spotify's app shows a song as liked when *any* release of it is saved (single vs album
 # version, deluxe editions, ...), but the Web API only checks the exact track ID. To match
-# the app we keep an index of Liked Songs keyed by (title, first artist).
+# the app we keep an index of Liked Songs keyed by (title, first artist). A saved track on
+# another listing of the same album (same UPC, a second delivery of one product) does not
+# count: the app shows those as separate songs.
 
-_track_keys = {}
+_tracks = {}
+_album_upcs = {}
 
 
 def _key(name, artist):
     return f'{name.strip().lower()}\t{artist.strip().lower()}'
 
 
-def track_key(uri):
-    if uri not in _track_keys:
+def _track(uri):
+    """(index key, album ID) for a track, fetched once per process."""
+    if uri not in _tracks:
         t = api('GET', '/tracks/' + uri.rsplit(':', 1)[1])
-        _track_keys[uri] = _key(t['name'], t['artists'][0]['name'])
-    return _track_keys[uri]
+        _tracks[uri] = (_key(t['name'], t['artists'][0]['name']), t['album']['id'])
+    return _tracks[uri]
+
+
+def track_key(uri):
+    return _track(uri)[0]
+
+
+def _album_upc(album_id):
+    if album_id not in _album_upcs:
+        _album_upcs[album_id] = (api('GET', '/albums/' + album_id).get('external_ids') or {}).get('upc')
+    return _album_upcs[album_id]
+
+
+def _duplicate_listing(a, b):
+    """Whether two tracks sit on two album IDs that are one delivery of the same album
+    product twice (the same UPC)."""
+    album_a, album_b = _track(a)[1], _track(b)[1]
+    if album_a == album_b:
+        return False
+    upc = _album_upc(album_a)
+    return upc is not None and upc == _album_upc(album_b)
+
+
+def _other_releases(uri, lib):
+    """Saved tracks, other than this one, that make the app show it as liked. Yielded
+    one at a time, so a caller that needs only the first stops looking up the rest."""
+    saved = {u for keys in _indexes(lib) for u in keys.get(track_key(uri), [])} - {uri}
+    return (u for u in sorted(saved) if not _duplicate_listing(uri, u))
 
 
 def _load_library():
@@ -288,11 +319,12 @@ def refresh_library(max_age=24 * 3600):
 
 
 def is_liked_any(uri):
-    """What the heart shows: this track, or any same-titled release by the same artist."""
+    """What the heart shows: this track, or a same-titled release by the same artist on
+    another album product."""
     if is_liked(uri):
         return True
     # while a scan runs, what it has gathered so far counts too
-    return any(keys.get(track_key(uri)) for keys in _indexes(_load_library()))
+    return any(_other_releases(uri, _load_library()))
 
 
 def write_liked(value):
@@ -343,16 +375,21 @@ def _push_like(uri, want):
     if want:
         api('PUT', '/me/library', uris=uri)
     else:
-        # unliking removes every saved release of the song, or the heart would stay on
-        uris = sorted({uri}.union(*(keys.get(key, []) for keys in _indexes(_load_library()))))
-        api('DELETE', '/me/library', uris=','.join(uris))
+        # unliking removes every saved release the heart counts, or it would stay on
+        uris = {uri, *_other_releases(uri, _load_library())}
+        api('DELETE', '/me/library', uris=','.join(sorted(uris)))
     with _library_lock():
         lib = _load_library() or {'scanned': 0, 'total': 0, 'keys': {}}
         for keys in _indexes(lib):
-            if not want:
+            if want:
+                if uri not in keys.setdefault(key, []):
+                    keys[key].append(uri)
+                continue
+            left = [u for u in keys.get(key, []) if u not in uris]
+            if left:
+                keys[key] = left
+            else:
                 keys.pop(key, None)
-            elif uri not in keys.setdefault(key, []):
-                keys[key].append(uri)
         _save_library(lib)
 
 
