@@ -167,12 +167,8 @@ say what could not be looked at. A change to how the program finds its files
 or starts is also checked installed, as in `/release` step 4, because a path
 bug can exist only under `/usr`.
 
-Afterwards, put the user's widget back the way it was:
-
-```bash
-bin/conky-spotify-nowplaying stop
-conky-spotify-nowplaying start          # only if the installed copy was running
-```
+Afterwards, leave the checkout copy running. Never stop it to start the
+installed copy again; the report says the checkout copy was left running.
 
 A change to documentation, skills or `scripts/` alone owes no run, and the pull
 request says so.
