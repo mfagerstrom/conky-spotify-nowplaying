@@ -5,6 +5,7 @@
 --                 'synced' header, untimed under 'plain'
 --   lyrics-scroll the plain lyrics' line offset, which conky-mouse.py sets with the wheel
 --   bg.txt        background colour picked from the album art
+--   widget.txt    conky's markup, which conky.conf shows through conky_widget
 --   seek-preview  fraction under the pointer while conky-mouse.py drags the seek bar
 -- conky redraws every update_interval (0.05 s); between draw.txt updates the playback
 -- position is advanced locally so the seek bar and lyrics move smoothly.
@@ -14,6 +15,12 @@ pcall(require, 'cairo_xlib')
 local cache = os.getenv('HOME') .. '/.cache/conky-spotify-nowplaying/'
 local hover_x, hover_y = -1, -1
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
+-- Foreground: white on dark or saturated backgrounds, near-black on light ones, whichever
+-- contrasts more with the background as it fades (nowplaying.py's LIGHT_FG and DARK_FG).
+-- nowplaying.py nudges the backgrounds it picks until one of the two reaches APCA Lc 60.
+local LIGHT, DARK = {1, 1, 1}, {0.07, 0.07, 0.07}
+local GREEN = {0x1d / 255, 0xb9 / 255, 0x54 / 255}   -- Spotify green, conky.conf's color1
+local fg, fg_back = LIGHT, DARK           -- fg_back: drawn on fg, like the play icon
 local clock = {stamp = nil, pos = 0, playing = false}
 local lyrics = {version = nil, lines = {}, plain = false}
 local scroll = nil                        -- eased lyric scroll position (line index, or offset)
@@ -74,13 +81,81 @@ end
 
 -- Background ---------------------------------------------------------------------------
 
-function conky_draw_background()
-    if conky_window == nil then return end
+local function apca_y(c)
+    -- APCA's screen luminance, soft-clamped near black (nowplaying.py's apca_y)
+    local y = 0.2126729 * c[1] ^ 2.4 + 0.7151522 * c[2] ^ 2.4 + 0.0721750 * c[3] ^ 2.4
+    if y < 0.022 then y = y + (0.022 - y) ^ 1.414 end
+    return y
+end
+
+local function contrast(text, back)
+    -- APCA lightness contrast of text on back as |Lc|, as nowplaying.py's contrast
+    local yt, yb = apca_y(text), apca_y(back)
+    if math.abs(yb - yt) < 0.0005 then return 0 end
+    if yb > yt then
+        local sapc = (yb ^ 0.56 - yt ^ 0.57) * 1.14
+        return sapc < 0.1 and 0 or (sapc - 0.027) * 100
+    end
+    local sapc = (yb ^ 0.65 - yt ^ 0.62) * 1.14
+    return sapc > -0.1 and 0 or -(sapc + 0.027) * 100
+end
+
+local function mix(a, b, t)
+    return {a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t}
+end
+
+local function secondary()
+    -- the artist and the times: the foreground up to a fifth of the way into the background
+    -- (on Spotify's #181818 that is d0d0d0), less where that would drop it under Lc 60
+    for t = 0.2, 0.01, -0.02 do
+        local c = mix(fg, bg, t)
+        if contrast(c, bg) >= 60 then return c end
+    end
+    return fg
+end
+
+local function green(target)
+    -- Spotify green, moved towards the foreground only as far as it takes to reach target
+    -- contrast with the background: dark green on a light or green background
+    local c = GREEN
+    for i = 1, 10 do
+        if contrast(c, bg) >= target then break end
+        c = mix(GREEN, fg, i / 10)
+    end
+    return c
+end
+
+local function set(cr, c, a)
+    cairo_set_source_rgba(cr, c[1], c[2], c[3], a or 1)
+end
+
+local function fade()
+    -- one step of the ~1 s fade towards bg.txt's colour, and the foreground for it
     local r, g, b = (read('bg.txt') or ''):match('(%S+) (%S+) (%S+)')
     local target = {tonumber(r) or 0.094, tonumber(g) or 0.094, tonumber(b) or 0.094}
-    local k = 1 - math.exp(-dt() * 3)                 -- ~1 s fade between tracks
+    local k = 1 - math.exp(-dt() * 3)
     for i = 1, 3 do bg[i] = bg[i] + (target[i] - bg[i]) * k end
+    if contrast(LIGHT, bg) >= contrast(DARK, bg) then fg, fg_back = LIGHT, DARK else fg, fg_back = DARK, LIGHT end
+end
 
+function conky_widget()
+    -- conky.text: nowplaying.py's markup, read on every update. Conky reads its text before
+    -- the draw hooks run, so the fade steps here, and its ${lua_parse fg ...} colours and
+    -- everything the hooks draw share one foreground in every frame.
+    fade()
+    return read('widget.txt') or ''
+end
+
+function conky_fg(which)
+    -- ${lua_parse fg title} and ${lua_parse fg text} in nowplaying.py's markup: conky's own
+    -- text in the foreground that follows the fading background
+    local c = which == 'title' and fg or secondary()
+    return string.format('${color %02x%02x%02x}', math.floor(c[1] * 255 + 0.5),
+                         math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5))
+end
+
+function conky_draw_background()
+    if conky_window == nil then return end
     local w, h = conky_window.width, conky_window.height
     local rad = math.min(24, h / 4)
     with_cairo(function(cr)
@@ -133,15 +208,15 @@ local function draw_controls(cr, c, s)
     local skip, play, playing = c[5] * s, c[6] * s, c[7] == 1
     for _, b in ipairs({{prev_cx, false}, {next_cx, true}}) do
         local on = hovered(b[1] - skip, cy - play / 2, b[1] + skip, cy + play / 2)
-        cairo_set_source_rgba(cr, 1, 1, 1, on and 1 or 0.7)
+        set(cr, fg, on and 1 or 0.7)
         skip_icon(cr, b[1], cy, skip, b[2])
     end
-    -- play/pause: white circle with a dark icon; grows slightly on hover
+    -- play/pause: a foreground circle with the other foreground's icon; grows slightly on hover
     local on = hovered(play_cx - play / 2, cy - play / 2, play_cx + play / 2, cy + play / 2)
-    cairo_set_source_rgba(cr, 1, 1, 1, 1)
+    set(cr, fg)
     cairo_arc(cr, play_cx, cy, play / 2 * (on and 1.06 or 1), 0, 2 * math.pi)
     cairo_fill(cr)
-    cairo_set_source_rgba(cr, 0.07, 0.07, 0.07, 1)
+    set(cr, fg_back)
     if playing then                                  -- pause: two slim rounded bars
         local gap, h = play * 0.12, play * 0.15
         rounded_line(cr, play_cx - gap, cy - h, play_cx - gap, cy + h, play * 0.1)
@@ -152,11 +227,11 @@ local function draw_controls(cr, c, s)
 end
 
 local function draw_window_buttons(cr, w, s)
-    -- minimize (a bar) and close (a cross), white like the skip buttons, full on hover
+    -- minimize (a bar) and close (a cross), the foreground like the skip buttons, full on hover
     local min_cx, close_cx, cy, h = w[1] * s, w[2] * s, w[3] * s, w[4] * s / 2
     local half = (w[2] - w[1]) * s / 2              -- each button's hit area is one pitch wide
     local function shade(cx)
-        cairo_set_source_rgba(cr, 1, 1, 1, hovered(cx - half, cy - half, cx + half, cy + half) and 1 or 0.7)
+        set(cr, fg, hovered(cx - half, cy - half, cx + half, cy + half) and 1 or 0.7)
     end
     shade(min_cx)
     rounded_line(cr, min_cx - h, cy, min_cx + h, cy, 2 * s)
@@ -168,8 +243,9 @@ end
 
 local function draw_heart(cr, h, s)
     -- Two round lobes with lines tangent to them meeting at the point, shaded like
-    -- minimize/close (white, full on hover); filled Spotify green when liked. The stroke is
-    -- thinner than theirs because a closed outline reads heavier than open lines.
+    -- minimize/close (the foreground, full on hover); filled Spotify green when liked, darkened
+    -- or lightened where the background is too close to it. The stroke is thinner than
+    -- theirs because a closed outline reads heavier than open lines.
     local cx, cy, w = h[1] * s, h[2] * s, h[3] * s
     local on = hovered(h[5] * s, h[6] * s, h[7] * s, h[8] * s)
     local r = w / 4                                 -- lobe radius; the lobes meet at cx
@@ -184,10 +260,10 @@ local function draw_heart(cr, h, s)
     cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND)
     cairo_set_line_width(cr, 1.5 * s)
     if h[4] == 1 then
-        cairo_set_source_rgba(cr, 0.114, 0.725, 0.329, 1)          -- conky.conf color1
+        set(cr, green(45))                               -- Lc 45, APCA's floor for icons
         cairo_fill_preserve(cr)
     else
-        cairo_set_source_rgba(cr, 1, 1, 1, on and 1 or 0.7)
+        set(cr, fg, on and 1 or 0.7)
     end
     cairo_stroke(cr)
 end
@@ -199,27 +275,24 @@ local function draw_bar(cr, b, s, pos)
     local active = preview ~= nil or hovered(x0 - 6 * s, y - 10 * s, x1 + 6 * s, y + 10 * s)
     if preview then fraction = preview end
     local fx = x0 + (x1 - x0) * fraction
-    cairo_set_source_rgba(cr, 1, 1, 1, 0.3)                            -- track
+    set(cr, fg, 0.3)                                                    -- track
     rounded_line(cr, x0, y, x1, y, 4 * s)
-    if active then
-        cairo_set_source_rgba(cr, 0x1d / 255, 0xb9 / 255, 0x54 / 255, 1) -- Spotify green
-    else
-        cairo_set_source_rgba(cr, 1, 1, 1, 1)
-    end
+    set(cr, active and green(45) or fg)                                  -- Spotify green
     if fx > x0 then rounded_line(cr, x0, y, fx, y, 4 * s) end
     if active then                                                      -- knob
-        cairo_set_source_rgba(cr, 1, 1, 1, 1)
+        set(cr, fg)
         cairo_arc(cr, fx, y, 6 * s, 0, 2 * math.pi)
         cairo_fill(cr)
     end
 end
 
 local function draw_label(cr, l, s, text)
-    -- NOW PLAYING in conky.conf's color1, 10 pt Ubuntu Sans Bold at its text scale (like
-    -- nowplaying.py's LABEL_FONT), the tops of its capitals on the given line
+    -- NOW PLAYING in Spotify green (moved towards the foreground as far as small text needs on
+    -- a background close to it), 10 pt Ubuntu Sans Bold at its text scale (like nowplaying.py's
+    -- LABEL_FONT), the tops of its capitals on the given line
     cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD)
     cairo_set_font_size(cr, 10 * text * 96 / 72 * s)
-    cairo_set_source_rgba(cr, 0x1d / 255, 0xb9 / 255, 0x54 / 255, 1)
+    set(cr, green(60))
     local ext = cairo_text_extents_t:create()
     cairo_text_extents(cr, 'NOW PLAYING', ext)
     cairo_move_to(cr, l[1] * s, l[2] * s - ext.y_bearing)
@@ -233,12 +306,12 @@ end
 
 local function draw_times(cr, t, s, text, pos, duration)
     -- elapsed from the left edge, total to the right edge, both centred on the bar's line:
-    -- conky.conf's default_color, 11 pt Ubuntu Sans at their text scale, like nowplaying.py's TIME_FONT
+    -- the artist's colour, 11 pt Ubuntu Sans at their text scale, like nowplaying.py's TIME_FONT
     local x0, x1, y = t[1] * s, t[2] * s, t[3] * s
     local total = fmt_time(duration)
     cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
     cairo_set_font_size(cr, 11 * text * 96 / 72 * s)
-    cairo_set_source_rgba(cr, 0xd0 / 255, 0xd0 / 255, 0xd0 / 255, 1)
+    set(cr, secondary())
     local ext = cairo_text_extents_t:create()
     cairo_text_extents(cr, total, ext)
     local baseline = y - ext.y_bearing - ext.height / 2              -- the digits' ink centred on y
@@ -312,7 +385,7 @@ local function draw_lyrics(cr, l, s, text, pos)
         -- 11 pt, growing smoothly to 13 pt as a line scrolls into the middle (current) row
         local pt = (11 + 2 * math.max(0, 1 - dist)) * text
         cairo_set_font_size(cr, pt * 96 / 72 * s)
-        cairo_set_source_rgba(cr, 1, 1, 1, a)
+        set(cr, fg, a)
         cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row
         show_text_with_notes(cr, ellipsize(cr, lines[i][2], x1 - x0), bold)
     end
@@ -340,7 +413,7 @@ end
 
 local function draw_plain_lyrics(cr, l, s, text)
     -- A static block from the first line down, which only the mouse wheel moves: every line
-    -- alike (11 pt, regular, full white), no current line and no fade at the edges.
+    -- alike (11 pt, regular, full foreground), no current line and no fade at the edges.
     local x0, x1, top, row, height = l[1] * s, l[2] * s, l[3] * s, l[4] * s, l[6] * s
     local rows = height / row
     local lines = lyrics.lines
@@ -356,7 +429,7 @@ local function draw_plain_lyrics(cr, l, s, text)
     cairo_clip(cr)
     cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
     cairo_set_font_size(cr, 11 * text * 96 / 72 * s)
-    cairo_set_source_rgba(cr, 1, 1, 1, 1)
+    set(cr, fg)
     local first = math.max(1, math.floor(scroll) + 1)
     for i = first, math.min(#lines, first + math.ceil(rows)) do
         local y = top + (i - 1 - scroll + 0.5) * row                       -- the row's middle

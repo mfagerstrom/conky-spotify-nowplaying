@@ -2,7 +2,7 @@
 """Builds the conky now-playing widget's contents.
 
 Four times a second this writes ~/.cache/conky-spotify-nowplaying/widget.txt as conky markup,
-which conky.conf renders with ${execpi}. It covers:
+which conky.conf renders through draw.lua's ${lua_parse widget}. It covers:
   - title/artist, wrapped to the widget's fixed column width (measured with Pango,
     using the same fonts conky draws with)
   - album art, downloaded once per track
@@ -159,12 +159,71 @@ class State:
 state = State()
 
 
+LIGHT_FG, DARK_FG = (1.0, 1.0, 1.0), (0.07, 0.07, 0.07)   # draw.lua's two foregrounds
+MIN_CONTRAST = 60                         # APCA Lc: its floor for body text, like the lyrics
+
+
+def apca_y(rgb):
+    """APCA's screen luminance of an sRGB colour (channels 0-1), soft-clamped near black."""
+    y = 0.2126729 * rgb[0] ** 2.4 + 0.7151522 * rgb[1] ** 2.4 + 0.0721750 * rgb[2] ** 2.4
+    return y + (0.022 - y) ** 1.414 if y < 0.022 else y
+
+
+def contrast(text, bg):
+    """APCA (APCA-W3 0.0.98G) lightness contrast of text on bg, as |Lc|, 0 to about 108.
+    Unlike WCAG 2's ratio it weighs text polarity, so white on a saturated red or orange
+    rates well above the dark text WCAG 2 would pick there."""
+    yt, yb = apca_y(text), apca_y(bg)
+    if abs(yb - yt) < 0.0005:
+        return 0.0
+    if yb > yt:                                  # dark text on a lighter background
+        sapc = (yb ** 0.56 - yt ** 0.57) * 1.14
+        return 0.0 if sapc < 0.1 else (sapc - 0.027) * 100
+    sapc = (yb ** 0.65 - yt ** 0.62) * 1.14     # light text on a darker background
+    return 0.0 if sapc > -0.1 else -(sapc + 0.027) * 100
+
+
+def readable(rgb):
+    """rgb as it is when white or the dark foreground reaches MIN_CONTRAST on it (draw.lua
+    draws in whichever contrasts more). In the middle band where neither does, its lightness
+    moves only as far as one of them needs, towards whichever needs the smaller move."""
+    if max(contrast(LIGHT_FG, rgb), contrast(DARK_FG, rgb)) >= MIN_CONTRAST:
+        return rgb
+    h, l, s = colorsys.rgb_to_hls(*rgb)
+
+    def reach(fg, far):
+        # contrast with fg grows steadily from l towards far (0 for white text, 1 for dark)
+        near = l
+        for _ in range(30):
+            mid = (near + far) / 2
+            if contrast(fg, colorsys.hls_to_rgb(h, mid, s)) >= MIN_CONTRAST:
+                far = mid
+            else:
+                near = mid
+        return far
+
+    darker, lighter = reach(LIGHT_FG, 0.0), reach(DARK_FG, 1.0)
+    return colorsys.hls_to_rgb(h, darker if l - darker <= lighter - l else lighter, s)
+
+
+def typical(pixels):
+    """A colour really on the cover for a group of its pixels: of the pixels in the group's
+    densest RGB cell (8 levels a channel), the one nearest that cell's mean. A plain mean
+    across a hue slice can land on a colour no pixel has."""
+    cells = {}
+    for p in pixels:
+        cells.setdefault(tuple(int(c * 8) for c in p), []).append(p)
+    cell = max(cells.values(), key=len)
+    mean = [sum(c) / len(cell) for c in zip(*cell)]
+    return min(cell, key=lambda p: sum((a - b) ** 2 for a, b in zip(p, mean)))
+
+
 def art_colour(path):
     """Spotify-style backdrop: the cover's biggest vivid colour (if it covers at least 5%
-    of the image, else its dominant colour), darkened so white text stays readable.
-    On a mostly grayscale cover, any small splash of colour beats the gray/black, and a
-    grayish or near-black dominant colour loses to the cover's main hue once colour fills
-    10% of it."""
+    of the image, else its dominant colour), as a colour one of its pixels has. On a mostly
+    grayscale cover, any small splash of colour beats the gray/black, and a grayish or
+    near-black dominant colour loses to the cover's main hue once colour fills 10% of it.
+    The colour is used as it is, apart from readable()'s nudge in the middle band."""
     pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
     buckets, accents, total, neutral = {}, {}, 0, 0
@@ -174,14 +233,14 @@ def art_colour(path):
             r, g, b = px[i] / 255, px[i + 1] / 255, px[i + 2] / 255
             h, sat, v = colorsys.rgb_to_hsv(r, g, b)
             key = (int(h * 12), int(sat * 3), int(v * 3))
-            tot = buckets.setdefault(key, [0, 0.0, 0.0, 0.0, sat >= 0.35 and v >= 0.3])
-            tot[0] += 1; tot[1] += r; tot[2] += g; tot[3] += b
+            tot = buckets.setdefault(key, [0, 0.0, 0.0, 0.0, sat >= 0.35 and v >= 0.3, []])
+            tot[0] += 1; tot[1] += r; tot[2] += g; tot[3] += b; tot[5].append((r, g, b))
             total += 1
             if sat < 0.15 or v < 0.15:           # gray, or too dark for its hue to mean much
                 neutral += 1
             elif sat >= 0.25 and v >= 0.2:       # accent candidates, grouped by hue only
-                acc = accents.setdefault(int(h * 12 + 0.5) % 12, [0, 0.0, 0.0, 0.0])
-                acc[0] += 1; acc[1] += r; acc[2] += g; acc[3] += b
+                acc = accents.setdefault(int(h * 12 + 0.5) % 12, [0, 0.0, 0.0, 0.0, False, []])
+                acc[0] += 1; acc[1] += r; acc[2] += g; acc[3] += b; acc[5].append((r, g, b))
     accent = max(accents.values(), default=None)
     vivid = [t for t in buckets.values() if t[4]]
     dominant = max(buckets.values())
@@ -194,9 +253,7 @@ def art_colour(path):
         best = accent                            # a dominant colour too faint to be an accent loses
     else:
         best = dominant
-    count, r, g, b = best[:4]
-    h, sat, v = colorsys.rgb_to_hsv(r / count, g / count, b / count)
-    return colorsys.hsv_to_rgb(h, min(sat, 0.65), min(max(v, 0.25), 0.38))
+    return readable(typical(best[5]))
 
 
 def update_bg():
@@ -583,7 +640,7 @@ def message(text):
     drawn over it."""
     write_atomic(DRAW, '\n'.join(draw_basics()) + '\n')
     return '\n'.join((first_line(MARGIN),
-                      f"${{goto {MARGIN}}}${{color}}${{font {conky_font(MESSAGE_FONT)}}}{esc(text)}{plain()}",
+                      f"${{goto {MARGIN}}}${{lua_parse fg text}}${{font {conky_font(MESSAGE_FONT)}}}{esc(text)}{plain()}",
                       last_gap(MARGIN + line_height(MESSAGE_FONT, PLAIN_FONT), 2 * MARGIN + MIN_HEIGHT)))
 
 
@@ -688,10 +745,10 @@ def render():
     next_cx = play_cx + PLAY_SIZE / 2 + CONTROL_GAP + SKIP_SIZE / 2
     time_x = next_cx + SKIP_SIZE / 2 + CONTROL_GAP + 4
     for line in wrap(title, TITLE_FONT):
-        out.append(f"{g}${{color2}}${{font {conky_font(TITLE_FONT)}}}{esc(line)}{plain()}")
+        out.append(f"{g}${{lua_parse fg title}}${{font {conky_font(TITLE_FONT)}}}{esc(line)}{plain()}")
         y += line_height(TITLE_FONT)
     for line in wrap(artist, ARTIST_FONT, max_lines=2):
-        out.append(f"{g}${{color}}${{font {conky_font(ARTIST_FONT)}}}{esc(line)}{plain()}")
+        out.append(f"{g}${{lua_parse fg text}}${{font {conky_font(ARTIST_FONT)}}}{esc(line)}{plain()}")
         y += line_height(ARTIST_FONT)
     # The play button's bottom meets the artwork's bottom, unless a title or artist wrapped
     # onto more lines than fit beside it: then the row, and the widget with it, moves down.
@@ -836,7 +893,7 @@ def main():
             try:
                 text = message(f'widget error: {str(e)[:60]}')
             except Exception:                   # the layout itself is what failed
-                text = f"${{color}}${{font Ubuntu Sans:size=11}}widget error: {esc(str(e))[:60]}\n"
+                text = f"${{lua_parse fg text}}${{font Ubuntu Sans:size=11}}widget error: {esc(str(e))[:60]}\n"
 
         with open(OUT + '.tmp', 'w') as f:
             f.write(text)

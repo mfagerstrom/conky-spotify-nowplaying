@@ -3,6 +3,9 @@ and the click regions render() writes."""
 import colorsys
 import json
 import os
+import re
+import shutil
+import subprocess
 import time
 import unittest
 import urllib.error
@@ -89,26 +92,91 @@ class ArtColourTest(support.TempDirTest):
         _, s, _ = self.hsv(self.cover(lambda x, y: rows[y]))
         self.assertAlmostEqual(s, 0, places=6)
 
-    def test_output_is_always_clamped(self):
+    def test_the_colour_is_a_pixel_on_the_cover(self):
+        # A hue slice spread from dark to bright: its mean would be a colour no pixel has.
+        shades = [(240, 90, 10), (120, 40, 5), (250, 110, 30), (235, 85, 12)]
+        path = self.cover(lambda x, y: shades[(x + y) % 4] if x < 30 else (10, 10, 10))
+        pixel = tuple(round(c * 255) for c in nowplaying.art_colour(path))
+        self.assertIn(pixel, shades)
+
+    def test_a_vivid_orange_is_used_as_it_is_with_white_text(self):
+        # The Somebody Better cover's orange-red: white text reaches Lc 60 on it, so no nudge.
+        # (WCAG 2's ratio would pick dark text here, which reads poorly on it.)
+        orange = (0xe2, 0x47, 0x07)
+        rgb = nowplaying.art_colour(self.cover(lambda x, y: orange))
+        self.assertEqual(tuple(round(c * 255) for c in rgb), orange)
+        self.assertGreater(nowplaying.contrast(nowplaying.LIGHT_FG, rgb),
+                           nowplaying.contrast(nowplaying.DARK_FG, rgb))
+
+    def test_a_light_colour_gets_dark_text(self):
+        yellow = (250 / 255, 225 / 255, 60 / 255)
+        self.assertGreater(nowplaying.contrast(nowplaying.DARK_FG, yellow),
+                           nowplaying.contrast(nowplaying.LIGHT_FG, yellow))
+
+    def test_a_middle_band_colour_moves_only_as_far_as_it_needs(self):
+        # Spotify green: neither white nor the dark foreground reaches Lc 60 on it.
+        green = (0x1e / 255, 0xb9 / 255, 0x54 / 255)
+        self.assertLess(max(nowplaying.contrast(fg, green)
+                            for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG)),
+                        nowplaying.MIN_CONTRAST)
+        rgb = nowplaying.readable(green)
+        best = max(nowplaying.contrast(fg, rgb) for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
+        self.assertAlmostEqual(best, nowplaying.MIN_CONTRAST, places=2)
+        self.assertLess(max(abs(a - b) for a, b in zip(rgb, green)), 0.05)
+        self.assertAlmostEqual(colorsys.rgb_to_hls(*rgb)[0], colorsys.rgb_to_hls(*green)[0], places=6)
+
+    def test_a_foreground_always_reaches_the_minimum_contrast(self):
         covers = {
             'white': lambda x, y: (255, 255, 255),
             'black': lambda x, y: (0, 0, 0),
+            'mid gray': lambda x, y: (119, 119, 119),
             'bright yellow': lambda x, y: (255, 240, 0),
             'saturated red': lambda x, y: (255, 0, 0),
+            'green': lambda x, y: (40, 150, 60),
             'dark navy': lambda x, y: (5, 10, 60),
             'gradient': lambda x, y: (x * 5, y * 5, 255 - x * 5),
         }
         for name, pixel in covers.items():
             with self.subTest(name):
-                _, s, v = self.hsv(self.cover(pixel))
-                self.assertLessEqual(s, 0.65 + 1e-9)
-                self.assertGreaterEqual(v, 0.25 - 1e-9)
-                self.assertLessEqual(v, 0.38 + 1e-9)
+                rgb = nowplaying.art_colour(self.cover(pixel))
+                best = max(nowplaying.contrast(fg, rgb)
+                           for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
+                self.assertGreaterEqual(best, nowplaying.MIN_CONTRAST - 1e-6)
 
     def test_update_bg_falls_back_to_spotify_gray_without_a_cover(self):
         self.redirect(nowplaying, COVER='missing.jpg', BG='bg.txt')
         nowplaying.update_bg()
         self.assertEqual(nowplaying._read(nowplaying.BG), '0.094 0.094 0.094')
+
+
+@unittest.skipUnless(shutil.which('lua5.3'), 'lua5.3 is not installed')
+class LuaContrastTest(unittest.TestCase):
+    """draw.lua picks the foreground with its own copy of contrast(); it must agree with the
+    one nowplaying.py nudges backgrounds with, or text lands on the wrong side of the floor."""
+
+    def test_draw_lua_contrast_matches_nowplaying(self):
+        with open(os.path.join(support.SRC, 'draw.lua')) as f:
+            src = f.read()
+        consts = re.search(r'^local LIGHT, DARK = .*$', src, re.M).group(0)
+        funcs = src[src.index('local function apca_y'):src.index('local function mix')]
+        colours = [(0xf2, 0x23, 0x13), (0xe2, 0x47, 0x07), (0xfa, 0xe1, 0x3c), (0x28, 0x5a, 0xdc),
+                   (0x1e, 0xb9, 0x54), (0x77, 0x77, 0x77), (0, 0, 0), (255, 255, 255)]
+        calls = ["print(string.format('%.6f %.6f %.6f %.6f %.6f %.6f', "
+                 "LIGHT[1], LIGHT[2], LIGHT[3], DARK[1], DARK[2], DARK[3]))"]
+        calls += [f"print(string.format('%.6f %.6f', contrast(LIGHT, {{{r}/255, {g}/255, {b}/255}}),"
+                  f" contrast(DARK, {{{r}/255, {g}/255, {b}/255}})))" for r, g, b in colours]
+        out = subprocess.run(['lua5.3', '-'], input='\n'.join([consts, funcs] + calls),
+                             capture_output=True, text=True, check=True).stdout.splitlines()
+        self.assertEqual(len(out), 1 + len(colours))
+        for got, want in zip(map(float, out[0].split()), nowplaying.LIGHT_FG + nowplaying.DARK_FG):
+            self.assertAlmostEqual(got, want, places=6)
+        for (r, g, b), line in zip(colours, out[1:]):
+            bg = (r / 255, g / 255, b / 255)
+            want = [nowplaying.contrast(nowplaying.LIGHT_FG, bg), nowplaying.contrast(nowplaying.DARK_FG, bg)]
+            got = [float(v) for v in line.split()]
+            self.assertEqual(len(got), 2)
+            for g_, w in zip(got, want):
+                self.assertAlmostEqual(g_, w, places=4)
 
 
 class WrapTest(unittest.TestCase):
@@ -397,7 +465,7 @@ class SizeSettingsTest(support.TempDirTest):
         _, short, _ = self.render((505, 63, 1.0))
         text, long, _ = self.render((505, 63, 1.0), title='A title long enough to need a second line '
                                                           'and then a third one as well')
-        self.assertEqual(text.count('${color2}'), 3)                        # three title lines
+        self.assertEqual(text.count('${lua_parse fg title}'), 3)                        # three title lines
         self.assertGreater(float(long['controls'][3]), float(short['controls'][3]))
         self.assertGreater(float(long['lyrics'][2]), float(short['lyrics'][2]))
 
