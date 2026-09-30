@@ -3,6 +3,7 @@ and the click regions render() writes."""
 import colorsys
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -156,20 +157,26 @@ class LuaContrastTest(unittest.TestCase):
     def test_draw_lua_contrast_matches_nowplaying(self):
         with open(os.path.join(support.SRC, 'draw.lua')) as f:
             src = f.read()
+        consts = re.search(r'^local LIGHT, DARK = .*$', src, re.M).group(0)
         funcs = src[src.index('local function apca_y'):src.index('local function mix')]
         colours = [(0xf2, 0x23, 0x13), (0xe2, 0x47, 0x07), (0xfa, 0xe1, 0x3c), (0x28, 0x5a, 0xdc),
                    (0x1e, 0xb9, 0x54), (0x77, 0x77, 0x77), (0, 0, 0), (255, 255, 255)]
-        calls = '\n'.join(
-            f"print(string.format('%.6f %.6f', contrast({{1, 1, 1}}, {{{r}/255, {g}/255, {b}/255}}),"
-            f" contrast({{0.07, 0.07, 0.07}}, {{{r}/255, {g}/255, {b}/255}})))"
-            for r, g, b in colours)
-        out = subprocess.run(['lua5.3', '-'], input=funcs + calls, capture_output=True,
-                             text=True, check=True).stdout.split('\n')
-        for (r, g, b), line in zip(colours, out):
+        calls = ["print(string.format('%.6f %.6f %.6f %.6f %.6f %.6f', "
+                 "LIGHT[1], LIGHT[2], LIGHT[3], DARK[1], DARK[2], DARK[3]))"]
+        calls += [f"print(string.format('%.6f %.6f', contrast(LIGHT, {{{r}/255, {g}/255, {b}/255}}),"
+                  f" contrast(DARK, {{{r}/255, {g}/255, {b}/255}})))" for r, g, b in colours]
+        out = subprocess.run(['lua5.3', '-'], input='\n'.join([consts, funcs] + calls),
+                             capture_output=True, text=True, check=True).stdout.splitlines()
+        self.assertEqual(len(out), 1 + len(colours))
+        for got, want in zip(map(float, out[0].split()), nowplaying.LIGHT_FG + nowplaying.DARK_FG):
+            self.assertAlmostEqual(got, want, places=6)
+        for (r, g, b), line in zip(colours, out[1:]):
             bg = (r / 255, g / 255, b / 255)
             want = [nowplaying.contrast(nowplaying.LIGHT_FG, bg), nowplaying.contrast(nowplaying.DARK_FG, bg)]
-            for got, w in zip(map(float, line.split()), want):
-                self.assertAlmostEqual(got, w, places=4)
+            got = [float(v) for v in line.split()]
+            self.assertEqual(len(got), 2)
+            for g_, w in zip(got, want):
+                self.assertAlmostEqual(g_, w, places=4)
 
 
 class WrapTest(unittest.TestCase):
