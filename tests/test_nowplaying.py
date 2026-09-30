@@ -921,7 +921,7 @@ class LibraryLoopTest(support.TempDirTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def run_loop(self, steps, turns=None, rate_limited=None, offset=None, current=False):
+    def run_loop(self, steps, turns=None, rate_limited=None, offset=None, current=False, stamp=(0.0, None)):
         """Runs library_loop() for `turns` turns (default: until every step is used) on a fake
         clock the sleeps move on, refresh_library() returning each step in turn. Returns the
         clock times refresh_library() was called at, relative to the start, and the mock."""
@@ -948,6 +948,8 @@ class LibraryLoopTest(support.TempDirTest):
                         rate_limited_until=mock.Mock(side_effect=rate_limited or [None] * turns),
                         scan_offset=mock.Mock(return_value=offset),
                         library_current=mock.Mock(return_value=current),
+                        library_stamp=mock.Mock(return_value=stamp),
+                        index_size=nowplaying.spotify_api.index_size,
                         append_log=nowplaying.spotify_api.append_log)
         with mock.patch.object(nowplaying, 'spotify_api', api), \
                 mock.patch.object(nowplaying.time, 'sleep', side_effect=sleep), \
@@ -955,6 +957,7 @@ class LibraryLoopTest(support.TempDirTest):
             with self.assertRaises(StopLoop):
                 nowplaying.library_loop()
         self.assertEqual(set(sleeps), {nowplaying.LIBRARY_PAGE_SECONDS})
+        self.api = api
         return called, api.refresh_library
 
     def log(self):
@@ -984,8 +987,29 @@ class LibraryLoopTest(support.TempDirTest):
         self.assertEqual(self.state.liked_checked, 0)
 
     def test_an_index_holding_everything_the_app_has_is_not_refreshed(self):
-        called, refresh = self.run_loop([], turns=100, current=True)
+        poll = nowplaying.LIBRARY_POLL_SECONDS
+        turns = 3 * poll // nowplaying.LIBRARY_PAGE_SECONDS
+        called, refresh = self.run_loop([], turns=turns, current=True)
         refresh.assert_not_called()
+        self.assertEqual(self.api.library_current.call_count, 3)   # once per poll, not per turn
+
+    def test_a_restart_waits_out_the_poll_from_the_last_save(self):
+        poll, page = nowplaying.LIBRARY_POLL_SECONDS, nowplaying.LIBRARY_PAGE_SECONDS
+        idle = {'scanned': 1, 'total': 120, 'keys': {'a\tx': ['u']}}
+        called, _ = self.run_loop([idle], turns=poll // page + 1, stamp=(1000.0 - 60, (120, 1)))
+        self.assertEqual(called, [poll - 60])
+
+    def test_a_restart_mid_scan_keeps_the_page_pace(self):
+        page = nowplaying.LIBRARY_PAGE_SECONDS
+        scanning = {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 100, 'keys': {}}}
+        called, _ = self.run_loop([scanning], turns=2, offset=50, stamp=(1000.0 - 5, (120, 0)))
+        self.assertEqual(called, [page])
+
+    def test_a_change_the_first_refresh_finds_checks_the_heart_again(self):
+        grown = {'scanned': 1, 'total': 121, 'keys': {'a\tx': ['u'], 'b\ty': ['v']}}
+        self.state.liked_checked = 99.0
+        self.run_loop([grown], turns=1, stamp=(0.0, (120, 1)))
+        self.assertEqual(self.state.liked_checked, 0)
 
     def test_a_rate_limit_pauses_without_a_request_and_logs_once(self):
         until = time.time() + 600

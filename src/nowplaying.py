@@ -856,7 +856,12 @@ def library_loop():
     fetches one 50-track page every LIBRARY_PAGE_SECONDS, so it stays far below Spotify's
     rate limit alongside the heart checks; a 5,000-song library takes about 25 minutes.
     A 429 pauses it without sending anything until the backoff has passed."""
-    paused, next_refresh, seen = False, 0.0, None
+    # A restart owes Spotify no earlier read than the copy before it did, so a widget that
+    # restarts, even in a loop, sends nothing more here.
+    saved_at, seen = spotify_api.library_stamp()
+    scanning = spotify_api.scan_offset() is not None
+    next_refresh = saved_at + (LIBRARY_PAGE_SECONDS if scanning else LIBRARY_POLL_SECONDS)
+    paused = False
     while True:
         until = spotify_api.rate_limited_until()
         if until:
@@ -865,27 +870,27 @@ def library_loop():
                 log(f'library scan paused at offset {offset} until '
                     + time.strftime('%T', time.localtime(until)))
             paused = offset is not None
-        elif (os.path.exists(spotify_api.TOKEN_FILE) and time.time() >= next_refresh
-              and not spotify_api.library_current()):
+        elif os.path.exists(spotify_api.TOKEN_FILE) and time.time() >= next_refresh:
             paused = False
             started = time.time()
             next_refresh = started + LIBRARY_POLL_SECONDS
-            try:
-                lib = spotify_api.refresh_library()
-                if 'scan' in lib:
-                    next_refresh = started + LIBRARY_PAGE_SECONDS
-                    log(f"library scan: {lib['scan']['offset']} of {lib['total']} indexed, "
-                        f"next page in {LIBRARY_PAGE_SECONDS} s")
-                else:
-                    if lib['scanned'] >= started:
-                        log(f"library scan done: {lib['total']} songs, {len(lib['keys'])} titles")
-                    indexed = (lib['total'], sum(map(len, lib['keys'].values())))
-                    if lib['scanned'] >= started or seen not in (None, indexed):
-                        with state.lock:
-                            state.liked_checked = 0
-                    seen = indexed
-            except Exception as e:
-                log(f'library refresh failed: {type(e).__name__}: {e}')
+            if not spotify_api.library_current():
+                try:
+                    lib = spotify_api.refresh_library()
+                    if 'scan' in lib:
+                        next_refresh = started + LIBRARY_PAGE_SECONDS
+                        log(f"library scan: {lib['scan']['offset']} of {lib['total']} indexed, "
+                            f"next page in {LIBRARY_PAGE_SECONDS} s")
+                    else:
+                        if lib['scanned'] >= started:
+                            log(f"library scan done: {lib['total']} songs, {len(lib['keys'])} titles")
+                        indexed = spotify_api.index_size(lib)
+                        if lib['scanned'] >= started or seen not in (None, indexed):
+                            with state.lock:
+                                state.liked_checked = 0
+                        seen = indexed
+                except Exception as e:
+                    log(f'library refresh failed: {type(e).__name__}: {e}')
         time.sleep(LIBRARY_PAGE_SECONDS)
 
 

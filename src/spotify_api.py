@@ -129,6 +129,9 @@ SETUP_URL = 'https://github.com/mfagerstrom/conky-spotify-nowplaying#like-button
 
 
 def login():
+    until = rate_limited_until()
+    if until:
+        raise RateLimited(until)                 # before the browser: the code exchange would be refused
     if not os.path.exists(CLIENT_ID_FILE):
         # Started from the widget's heart or the app menu, so there may be no terminal.
         msg = ('The like button needs a Spotify app Client ID first. Opening the setup steps; '
@@ -374,6 +377,20 @@ def _scan_page(lib, page):
     return lib
 
 
+def index_size(lib):
+    """(songs in the library, saved releases in the index): changes when the index does."""
+    return lib['total'], sum(map(len, lib['keys'].values()))
+
+
+def library_stamp():
+    """(when the index was last saved, its index_size), or (0.0, None) when there is none."""
+    lib = _load_library()
+    try:
+        return os.path.getmtime(LIBRARY_FILE), index_size(lib) if lib else None
+    except OSError:
+        return 0.0, None
+
+
 def library_current(max_age=24 * 3600):
     """Whether a refresh of the index would find nothing to add: it is fresh, no scan is
     running, and it already holds every song the Spotify app has saved. Only known while
@@ -515,7 +532,11 @@ def recently_toggled(seconds=15):
 if __name__ == '__main__':
     cmd = sys.argv[1] if len(sys.argv) > 1 else ''
     if cmd == 'login':
-        login()
+        try:
+            login()
+        except RateLimited as e:
+            _notify_rate_limited(e.until)        # started from the heart, there may be no terminal
+            sys.exit(f'Login failed: {e}')
     elif cmd == 'toggle':
         toggle()
     elif cmd == 'status':

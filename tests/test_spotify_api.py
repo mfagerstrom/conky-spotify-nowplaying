@@ -506,6 +506,32 @@ class TokenTest(SpotifyApiTest):
         urlopen.assert_not_called()
 
 
+class LoginTest(SpotifyApiTest):
+
+    def test_login_during_a_lockout_opens_no_browser(self):
+        self.at(NOW)
+        with open(spotify_api.BACKOFF_FILE, 'w') as f:
+            f.write(str(NOW + 600))
+        with mock.patch.object(spotify_api.subprocess, 'Popen') as popen, \
+                mock.patch('http.server.HTTPServer') as server:
+            with self.assertRaises(spotify_api.RateLimited):
+                spotify_api.login()
+        popen.assert_not_called()
+        server.assert_not_called()
+
+
+class LibraryStampTest(SpotifyApiTest):
+
+    def test_no_index(self):
+        self.assertEqual(spotify_api.library_stamp(), (0.0, None))
+
+    def test_an_index(self):
+        spotify_api._save_library({'scanned': 1, 'total': 3, 'keys': {'a\tx': ['1', '2'], 'b\ty': ['3']}})
+        saved_at, size = spotify_api.library_stamp()
+        self.assertEqual(saved_at, os.path.getmtime(spotify_api.LIBRARY_FILE))
+        self.assertEqual(size, (3, 3))
+
+
 class LookupsTest(SpotifyApiTest):
 
     def restart(self):
