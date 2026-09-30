@@ -79,7 +79,17 @@ autostart entry, if you turned it on, is `~/.config/autostart/conky-spotify-nowp
 
 ### Like button (optional)
 
-Playback control, lyrics and album art work without any account setup. For the like button:
+Playback control, lyrics and album art work without any account setup.
+
+The heart reads whether a song is liked from the Spotify desktop app's own copy of your Liked
+Songs, which it keeps in `~/.cache/spotify/Users/<name>-user/primary.ldb`. The widget only reads
+those files, while the app runs or not, and sends Spotify nothing to do it, so the heart follows
+a like or unlike made in the app within about five seconds, needs no login and works while
+Spotify rate-limits the widget. It looks for the app's cache where the Spotify apt package,
+snap and flatpak keep it. Without those files (Spotify used only on another device, say) the
+heart asks the Spotify Web API instead, every 30 seconds, which needs the login below.
+
+Clicking the heart likes or unlikes the song through the Web API, which needs the login:
 
 1. Create an app at <https://developer.spotify.com/dashboard> with redirect URI
    `http://127.0.0.1:8888/callback` and the **Web API** enabled.
@@ -96,7 +106,10 @@ matching the Spotify app; unliking from the widget removes every saved release. 
 it does not count a copy saved from a duplicate listing of the same album (Spotify sometimes
 lists one album twice, under the same barcode).
 To know which songs you have saved under another release, the widget keeps an index of your
-Liked Songs in `~/.cache/conky-spotify-nowplaying/library.json`. After you log in it reads
+Liked Songs in `~/.cache/conky-spotify-nowplaying/library.json`, and counts a release in it
+only while the app still has it saved. Finding those other releases uses the Web API, so it
+needs the login and pauses while Spotify rate-limits the widget; the heart then shows whether
+the app has this exact release saved. After you log in the widget reads
 the whole library slowly in the background, one page of 50 songs every 15 seconds (about 25
 minutes for 5,000 songs), and does the same again once a day. Until the index is complete,
 a song liked only as a different release may show as not liked. The index saves its place
@@ -104,10 +117,11 @@ after every page, so quitting the widget or hitting a rate limit resumes the rea
 than restarting it.
 
 Spotify's limits for new developer apps are low. If Spotify rate-limits the app, the widget
-stops calling the API until the block lifts, and hides the heart meanwhile, since it can
-neither read nor change likes; everything else keeps working, and minimize and close stay
-where they are. The heart comes back, with the track's like state checked again, once the
-block lifts.
+stops calling the API until the block lifts. The heart keeps showing what the Spotify app has
+saved, and a click on it only says when likes can be changed again. Without the app's files
+to read, the heart is hidden meanwhile, since it can neither read nor change likes;
+everything else keeps working, and minimize and close stay where they are. It comes back,
+with the track's like state checked again, once the block lifts.
 
 ## Development
 
@@ -155,6 +169,7 @@ registered on Launchpad), followed until Launchpad publishes it.
 | `src/widget_size.py` | Reads and writes the size settings: width, lyrics height, text scale |
 | `src/lyrics_settings.py` | Reads and writes the lyrics settings: on or off, autoscroll or static |
 | `src/spotify_api.py` | Minimal Spotify Web API client (PKCE login, like/unlike, Liked Songs index, rate-limit backoff) |
+| `src/spotify_local.py` | Reads the Spotify desktop app's Liked Songs from its LevelDB on disk, read-only, for the heart |
 | `src/tray.py` | Top-bar (AppIndicator) icon: current track, text scaling, lyrics on/off and scrolling, always on top, start at login, show/hide, Quit |
 | `debian/`, `packaging/` | Debian packaging (also used for the PPA), desktop entry, icons |
 

@@ -5,11 +5,15 @@
   spotify_api.py toggle   like/unlike the track currently playing in Spotify
   spotify_api.py status   print whether the current track is liked
 
+Whether a track is liked is read from the Spotify app's own Liked Songs on disk
+(spotify_local) where it can be, and from the Web API only where it cannot.
 The refresh token is kept in ~/.config/conky-spotify-nowplaying/spotify-token.json (mode 600).
 The like state for the widget is written to ~/.cache/conky-spotify-nowplaying/liked ("1"/"0").
 """
 import base64, contextlib, fcntl, hashlib, http.server, json, os, secrets, subprocess, sys, time
 import urllib.error, urllib.parse, urllib.request
+
+import spotify_local
 
 CONF_DIR = os.path.expanduser('~/.config/conky-spotify-nowplaying')
 CACHE_DIR = os.path.expanduser('~/.cache/conky-spotify-nowplaying')
@@ -166,8 +170,17 @@ def current_track_uri():
     return None
 
 
+def likes_read_locally():
+    """Whether likes are read from the Spotify app on this machine rather than the Web API,
+    so reading them needs neither a login nor Spotify's rate limit."""
+    return spotify_local.database() is not None
+
+
 def is_liked(uri):
     """Whether this exact track is saved (see is_liked_any for what the heart shows)."""
+    saved = spotify_local.is_saved(uri)
+    if saved is not None:
+        return saved
     return bool(api('GET', '/me/library/contains', uris=uri)[0])
 
 
@@ -213,10 +226,13 @@ def _duplicate_listing(a, b):
     return upc is not None and upc == _album_upc(album_b)
 
 
-def _other_releases(uri, lib):
+def _other_releases(uri, lib, still_saved=None):
     """Saved tracks, other than this one, that make the app show it as liked. Yielded
-    one at a time, so a caller that needs only the first stops looking up the rest."""
+    one at a time, so a caller that needs only the first stops looking up the rest.
+    still_saved, the app's own Liked Songs IDs, drops those unliked since the index saw them."""
     saved = {u for keys in _indexes(lib) for u in keys.get(track_key(uri), [])} - {uri}
+    if still_saved is not None:
+        saved = {u for u in saved if u.rsplit(':', 1)[1] in still_saved}
     return (u for u in sorted(saved) if not _duplicate_listing(uri, u))
 
 
@@ -323,8 +339,12 @@ def is_liked_any(uri):
     another album product."""
     if is_liked(uri):
         return True
+    still_saved = spotify_local.saved_tracks()
+    if still_saved is not None and (rate_limited_until() or not os.path.exists(TOKEN_FILE)):
+        # Other releases are found through the Web API; the app's answer for this one stands.
+        return False
     # while a scan runs, what it has gathered so far counts too
-    return any(_other_releases(uri, _load_library()))
+    return any(_other_releases(uri, _load_library(), still_saved))
 
 
 def write_liked(value):
@@ -408,6 +428,7 @@ if __name__ == '__main__':
         toggle()
     elif cmd == 'status':
         uri = current_track_uri()
-        print(uri, 'exact:', is_liked(uri) if uri else None, 'any release:', is_liked_any(uri) if uri else None)
+        print(uri, 'exact:', is_liked(uri) if uri else None, 'any release:', is_liked_any(uri) if uri else None,
+              'read from:', 'the Spotify app' if likes_read_locally() else 'the Web API')
     else:
         sys.exit(__doc__)

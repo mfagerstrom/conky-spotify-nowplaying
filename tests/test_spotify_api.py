@@ -294,6 +294,65 @@ class DuplicateListingTest(SpotifyApiTest):
         self.assertFalse(spotify_api.is_liked_any('spotify:track:playing'))
 
 
+class LocalLikesTest(SpotifyApiTest):
+    """Likes read from the Spotify app's own files (spotify_local), with the Web API only
+    where those cannot answer."""
+
+    def setUp(self):
+        super().setUp()
+        self.track('spotify:track:playing', 'song\tartist', 'album', '111')
+        self.track('spotify:track:single', 'song\tartist', 'single', '222')
+        spotify_api._save_library({'scanned': NOW, 'total': 1,
+                                   'keys': {'song\tartist': ['spotify:track:single']}})
+
+    def app_has(self, *ids):
+        """The app's Liked Songs: these IDs, or unreadable for None."""
+        saved = None if ids == (None,) else frozenset(ids)
+        patcher = mock.patch.object(spotify_api.spotify_local, 'saved_tracks', return_value=saved)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def log_in(self):
+        os.makedirs(os.path.dirname(spotify_api.TOKEN_FILE), exist_ok=True)
+        with open(spotify_api.TOKEN_FILE, 'w') as f:
+            f.write('{}')
+
+    def test_the_exact_track_is_read_from_the_app_without_a_request(self):
+        self.app_has('playing')
+        with mock.patch.object(spotify_api, 'api') as api:
+            self.assertTrue(spotify_api.is_liked('spotify:track:playing'))
+            self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+        api.assert_not_called()
+
+    def test_the_web_api_answers_when_the_app_cannot(self):
+        self.app_has(None)
+        with mock.patch.object(spotify_api, 'api', return_value=[True]) as api:
+            self.assertTrue(spotify_api.is_liked('spotify:track:playing'))
+        api.assert_called_once_with('GET', '/me/library/contains', uris='spotify:track:playing')
+
+    def test_another_release_saved_in_the_app_still_fills_the_heart(self):
+        self.log_in()
+        self.app_has('single')
+        with mock.patch.object(spotify_api, 'api') as api:
+            self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
+        api.assert_not_called()                               # the index and cache answered
+
+    def test_a_release_unliked_in_the_app_since_the_index_saw_it_does_not(self):
+        self.log_in()
+        self.app_has()
+        self.assertFalse(spotify_api.is_liked_any('spotify:track:playing'))
+
+    def test_rate_limited_or_logged_out_the_apps_answer_for_the_track_stands(self):
+        self.app_has('single')
+        with mock.patch.object(spotify_api, 'api', side_effect=AssertionError('no requests')):
+            self.assertFalse(spotify_api.is_liked_any('spotify:track:playing'))  # logged out
+            self.log_in()
+            with open(spotify_api.BACKOFF_FILE, 'w') as f:
+                f.write(str(NOW + 3600))
+            self.at(NOW)
+            self.assertFalse(spotify_api.is_liked_any('spotify:track:playing'))
+
+
 class TimeWindowTest(SpotifyApiTest):
 
     def write(self, path, text):

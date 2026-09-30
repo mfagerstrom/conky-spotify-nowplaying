@@ -251,12 +251,82 @@ class WindowButtonsTest(support.TempDirTest):
         self.assertIsNotNone(regions['heart'])
         self.assertIn('\nheart ', '\n' + draw)
 
+    def test_read_from_the_app_the_heart_stays_while_rate_limited(self):
+        self.log_in()
+        self.rate_limit(3600)
+        with mock.patch.object(nowplaying.spotify_api, 'likes_read_locally', return_value=True):
+            _, regions, draw = self.render('Playing')
+        self.assertIsNotNone(regions['heart'])
+        self.assertIn('\nheart ', '\n' + draw)
+
+    def test_read_from_the_app_the_heart_is_polled_every_few_seconds(self):
+        for local, polled in ((True, True), (False, False)):
+            with self.subTest(local=local):
+                self.render('Playing')
+                nowplaying.state.liked_checked = time.time() - nowplaying.LOCAL_LIKE_POLL_SECONDS - 1
+                answers = {'status': 'Playing',
+                           'metadata': 'track1\tTitle\tArtist\tAlbum\t\t10000000\t200000000'}
+                with mock.patch.object(nowplaying, 'playerctl', side_effect=lambda cmd, *_: answers[cmd]), \
+                        mock.patch.object(nowplaying.threading, 'Thread') as thread, \
+                        mock.patch.object(nowplaying.spotify_api, 'likes_read_locally', return_value=local):
+                    nowplaying.render()
+                targets = [c.kwargs['target'] for c in thread.call_args_list]
+                self.assertEqual(nowplaying.fetch_liked in targets, polled)
+
     def test_buttons_stay_when_spotify_is_not_playing(self):
         text, regions, draw = self.render('Stopped')
         self.assertIn('not playing', text)
         self.assertEqual(sorted(regions), ['close', 'minimize'])
         self.assertIn('\nwindow ', draw)
         self.assertNotIn('bar ', draw)
+
+
+class FetchLikedTest(support.TempDirTest):
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(nowplaying, LOG='nowplaying.log')
+        self.redirect(nowplaying.spotify_api, LIKED_FILE='liked', BACKOFF_FILE='rate-limited-until',
+                      TOGGLED_FILE='liked-toggled')
+        state = nowplaying.State()
+        state.track = 'track1'
+        patcher = mock.patch.object(nowplaying, 'state', state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(nowplaying.spotify_api, 'current_track_uri', return_value='spotify:track:track1')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def check(self, local, liked=True):
+        with mock.patch.object(nowplaying.spotify_api, 'likes_read_locally', return_value=local), \
+                mock.patch.object(nowplaying.spotify_api, 'is_liked_any', return_value=liked) as is_liked_any:
+            nowplaying.fetch_liked('track1')
+        return is_liked_any
+
+    def log_lines(self):
+        try:
+            return [line for line in support.read(nowplaying.LOG).splitlines() if 'like check' in line]
+        except OSError:
+            return []
+
+    def test_rate_limited_the_heart_is_still_read_from_the_app(self):
+        nowplaying.write_atomic(nowplaying.spotify_api.BACKOFF_FILE, str(time.time() + 3600))
+        self.check(local=True).assert_called_once_with('spotify:track:track1')
+        self.assertEqual(support.read(nowplaying.spotify_api.LIKED_FILE), '1')
+        self.assertIn('liked=True from the app', self.log_lines()[0])
+
+    def test_rate_limited_without_the_app_nothing_is_asked(self):
+        nowplaying.write_atomic(nowplaying.spotify_api.BACKOFF_FILE, str(time.time() + 3600))
+        self.check(local=False).assert_not_called()
+
+    def test_read_from_the_app_only_a_new_answer_is_logged(self):
+        self.check(local=True)
+        self.check(local=True)
+        self.check(local=True, liked=False)
+        self.assertEqual(len(self.log_lines()), 2)
+        self.check(local=False)
+        self.check(local=False)
+        self.assertEqual(len(self.log_lines()), 4)
 
 
 class SizeSettingsTest(support.TempDirTest):

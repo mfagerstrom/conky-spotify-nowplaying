@@ -9,7 +9,8 @@ which conky.conf renders with ${execpi}. It covers:
   - the controls row: draw.lua draws the buttons and seek bar from draw.txt; click
     regions for conky-mouse.py go to regions.json
   - the heart, minimize and close buttons at the top right (drawn by draw.lua)
-  - like state (heart), via spotify_api.py; refreshed on track change and every 10 s
+  - like state (heart), via spotify_api.py; refreshed on track change, then every 5 s from
+    the Spotify app's files, or every 30 s through the Web API where those cannot be read
   - lyrics from LRCLIB (lrclib.net) -> lyrics.txt. draw.lua scrolls synced ones smoothly
     along with playback (previous / current / next line); plain ones, for a track LRCLIB
     has no synced lyrics for, are a static block the mouse wheel scrolls. Each answer is
@@ -76,7 +77,8 @@ WINDOW_BUTTON_SIZE = 10                       # minimize / close icons, right of
 WINDOW_BUTTON_PITCH = 22                      # centre to centre, and each one's hit width
 HEART_PITCH = 25                              # heart centre to minimize centre
 HEART_WIDTH = 16                              # the heart draw.lua strokes, as wide as HEART_FONT's ♡
-LIKE_POLL_SECONDS = 30
+LIKE_POLL_SECONDS = 30                        # through the Web API
+LOCAL_LIKE_POLL_SECONDS = 5                   # read from the Spotify app's files, which costs nothing
 LIBRARY_PAGE_SECONDS = 15                     # between Liked Songs pages of a full scan
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
 NO_ART_WAIT = 3                               # s a track with a length waits for art before the placeholder
@@ -226,20 +228,25 @@ def fetch_liked(track_id):
     if spotify_api.recently_toggled():
         log(f'like check skipped (recent click): {track_id}')
         return
-    if spotify_api.rate_limited_until():
+    local = spotify_api.likes_read_locally()
+    if spotify_api.rate_limited_until() and not local:
         return                                   # heart stays unknown (outline) until it lifts
     uri = None
     try:
         uri = spotify_api.current_track_uri()
         liked = spotify_api.is_liked_any(uri) if uri else None
-        log(f'like check: {track_id} uri={uri} liked={liked}')
+        line = f"like check: {track_id} uri={uri} liked={liked} from {'the app' if local else 'the Web API'}"
     except Exception as e:
         liked = None
-        log(f'like check failed: {track_id} uri={uri} {type(e).__name__}: {e}')
+        line = f'like check failed: {track_id} uri={uri} {type(e).__name__}: {e}'
     with state.lock:
         if state.track != track_id:
             return
+        # Read from the app every few seconds, so only a new answer is logged.
+        changed = liked != state.liked or not local
         state.liked = liked
+    if changed:
+        log(line)
     spotify_api.write_liked(liked)
 
 
@@ -609,9 +616,12 @@ def render():
     # has had a moment to settle, and look them up again if it changes afterwards.
     lyrics_key = (track_id, title, artist, album, round(duration))
     fetch_lyrics_now = fetch_cover_now = False
-    # While Spotify rate limits the widget, the like state cannot be read and a click only
-    # posts a notification, so the heart is left out. Logged out, it stays: a click logs in.
-    heart_hidden = bool(spotify_api.rate_limited_until()) and os.path.exists(spotify_api.TOKEN_FILE)
+    # While Spotify rate limits the widget, a click only posts a notification, and without
+    # the Spotify app's files to read the like state from, it cannot be read either: the
+    # heart is left out then. Logged out, it stays: a click logs in.
+    likes_local = spotify_api.likes_read_locally()
+    heart_hidden = (bool(spotify_api.rate_limited_until()) and os.path.exists(spotify_api.TOKEN_FILE)
+                    and not likes_local)
     with state.lock:
         new_track = track_id != state.track
         if new_track:
@@ -637,7 +647,8 @@ def render():
                 log(f'no artwork: {title!r} by {artist!r} ({track_id}), showing the placeholder')
         # The limit lifting starts a like check at once, rather than on the next poll; the
         # heart is drawn again from this render, and fills in when the check answers.
-        poll_like = (new_track or now - state.liked_checked > LIKE_POLL_SECONDS
+        like_poll = LOCAL_LIKE_POLL_SECONDS if likes_local else LIKE_POLL_SECONDS
+        poll_like = (new_track or now - state.liked_checked > like_poll
                      or (state.heart_hidden and not heart_hidden))
         if state.heart_hidden != heart_hidden:
             state.heart_hidden = heart_hidden
