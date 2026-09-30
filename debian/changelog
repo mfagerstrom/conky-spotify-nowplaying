@@ -1,3 +1,24 @@
+conky-spotify-nowplaying (1.4.0) resolute; urgency=medium
+
+  * The heart is read from the Spotify app's own Liked Songs on your
+    disk, so it updates within seconds, keeps working while Spotify rate
+    limits the widget, and no longer uses the Web API while the app is
+    installed.
+  * The tray menu has a Lyrics toggle and a Lyrics scrolling choice of
+    Autoscroll or Static.
+  * Songs with no synced lyrics show their plain lyrics as a block you
+    scroll with the mouse wheel.
+  * Lyrics are found through LRCLIB's search when its exact lookup fails
+    or errors, instead of showing none.
+  * A song saved from one listing of an album that Spotify lists twice
+    no longer shows as liked on the other listing.
+  * A widget restored from the tray reappears at its saved position
+    instead of the middle of the screen.
+  * The tray icon no longer logs a Gtk-CRITICAL warning on Wayland when
+    the panel is slow to start.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Tue, 29 Sep 2026 22:18:49 -0400
+
 conky-spotify-nowplaying (1.3.1) resolute; urgency=medium
 
   * The liked-songs index is read slowly in the background, one page of
