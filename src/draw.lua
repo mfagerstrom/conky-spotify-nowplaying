@@ -19,7 +19,6 @@ local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at 
 -- contrasts more with the background as it fades (nowplaying.py's LIGHT_FG and DARK_FG).
 -- nowplaying.py nudges the backgrounds it picks until one of the two reaches APCA Lc 60.
 local LIGHT, DARK = {1, 1, 1}, {0.07, 0.07, 0.07}
-local GREEN = {0x1d / 255, 0xb9 / 255, 0x54 / 255}   -- Spotify green, conky.conf's color1
 local fg, fg_back = LIGHT, DARK           -- fg_back: drawn on fg, like the play icon
 local clock = {stamp = nil, pos = 0, playing = false}
 local lyrics = {version = nil, lines = {}, plain = false}
@@ -112,17 +111,6 @@ local function secondary()
         if contrast(c, bg) >= 60 then return c end
     end
     return fg
-end
-
-local function green(target)
-    -- Spotify green, moved towards the foreground only as far as it takes to reach target
-    -- contrast with the background: dark green on a light or green background
-    local c = GREEN
-    for i = 1, 10 do
-        if contrast(c, bg) >= target then break end
-        c = mix(GREEN, fg, i / 10)
-    end
-    return c
 end
 
 local function set(cr, c, a)
@@ -243,9 +231,9 @@ end
 
 local function draw_heart(cr, h, s)
     -- Two round lobes with lines tangent to them meeting at the point, shaded like
-    -- minimize/close (the foreground, full on hover); filled Spotify green when liked, darkened
-    -- or lightened where the background is too close to it. The stroke is thinner than
-    -- theirs because a closed outline reads heavier than open lines.
+    -- minimize/close (the foreground, full on hover); filled with the full foreground when
+    -- liked. The stroke is thinner than theirs because a closed outline reads heavier than
+    -- open lines.
     local cx, cy, w = h[1] * s, h[2] * s, h[3] * s
     local on = hovered(h[5] * s, h[6] * s, h[7] * s, h[8] * s)
     local r = w / 4                                 -- lobe radius; the lobes meet at cx
@@ -260,7 +248,7 @@ local function draw_heart(cr, h, s)
     cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND)
     cairo_set_line_width(cr, 1.5 * s)
     if h[4] == 1 then
-        set(cr, green(45))                               -- Lc 45, APCA's floor for icons
+        set(cr, fg)
         cairo_fill_preserve(cr)
     else
         set(cr, fg, on and 1 or 0.7)
@@ -277,22 +265,20 @@ local function draw_bar(cr, b, s, pos)
     local fx = x0 + (x1 - x0) * fraction
     set(cr, fg, 0.3)                                                    -- track
     rounded_line(cr, x0, y, x1, y, 4 * s)
-    set(cr, active and green(45) or fg)                                  -- Spotify green
+    set(cr, fg)                                                         -- played part, knob
     if fx > x0 then rounded_line(cr, x0, y, fx, y, 4 * s) end
-    if active then                                                      -- knob
-        set(cr, fg)
+    if active then
         cairo_arc(cr, fx, y, 6 * s, 0, 2 * math.pi)
         cairo_fill(cr)
     end
 end
 
 local function draw_label(cr, l, s, text)
-    -- NOW PLAYING in Spotify green (moved towards the foreground as far as small text needs on
-    -- a background close to it), 10 pt Ubuntu Sans Bold at its text scale (like nowplaying.py's
-    -- LABEL_FONT), the tops of its capitals on the given line
+    -- NOW PLAYING in the foreground, 10 pt Ubuntu Sans Bold at its text scale (like
+    -- nowplaying.py's LABEL_FONT), the tops of its capitals on the given line
     cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD)
     cairo_set_font_size(cr, 10 * text * 96 / 72 * s)
-    set(cr, green(60))
+    set(cr, fg)
     local ext = cairo_text_extents_t:create()
     cairo_text_extents(cr, 'NOW PLAYING', ext)
     cairo_move_to(cr, l[1] * s, l[2] * s - ext.y_bearing)
