@@ -48,6 +48,22 @@ def saved(uri, name, artist):
     return {'track': {'uri': uri, 'name': name, 'artists': [{'name': artist}]}}
 
 
+class LogTest(SpotifyApiTest):
+    """nowplaying.log's lines, from the widget and from the heart click's own process, both
+    written by log(), start with the date and the time."""
+
+    def test_a_line_starts_with_the_date_and_the_time(self):
+        days = {time.strftime('%F')}
+        spotify_api.log('like check failed: offline')
+        spotify_api.log('library scan done')
+        days.add(time.strftime('%F'))                  # the test may straddle midnight
+        lines = support.read(spotify_api.LOG_FILE).splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertRegex(lines[0], r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d like check failed: offline$')
+        self.assertRegex(lines[1], r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d library scan done$')
+        self.assertIn(lines[0][:10], days)
+
+
 class TrackKeyTest(SpotifyApiTest):
 
     def test_key_ignores_case_and_surrounding_space(self):
@@ -455,7 +471,7 @@ class ApiTest(SpotifyApiTest):
         with mock.patch('urllib.request.urlopen', side_effect=urllib.error.URLError('offline')):
             with self.assertRaises(urllib.error.URLError):
                 spotify_api.api('GET', '/me/tracks')
-        lines = [line[9:] for line in support.read(spotify_api.LOG_FILE).splitlines()]
+        lines = [line.split(' ', 2)[2] for line in support.read(spotify_api.LOG_FILE).splitlines()]
         self.assertEqual(lines, ['api: GET /v1/me/library/contains 200', 'api: DELETE /v1/me/library 500',
                                  'api: GET /v1/me/tracks URLError'])
 

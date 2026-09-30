@@ -49,11 +49,13 @@ def _read_text(path):
 
 
 def append_log(path, msg):
+    # Each line carries the date as well as the time, since a log spans several days
+    # before it rotates.
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
         os.replace(path, path + '.1')              # keep the log small: one rotated copy
     with open(path, 'a') as f:
-        f.write(time.strftime('%T ') + msg + '\n')
+        f.write(time.strftime('%F %T ') + msg + '\n')
 
 
 def log(msg):
