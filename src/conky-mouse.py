@@ -156,8 +156,9 @@ class XEvent(ctypes.Union):
 
 
 def log(msg):
+    # Dated like nowplaying.log's lines, so the two logs line up across days.
     with open(LOG, 'a') as f:
-        f.write(time.strftime('%T ') + msg + '\n')
+        f.write(time.strftime('%F %T ') + msg + '\n')
 
 
 def conky_window():

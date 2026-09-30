@@ -187,5 +187,14 @@ class ScrollLyricsTest(support.TempDirTest):
         self.assertEqual(self.wheel(True, y=400, s=2), 1)
 
 
+class LogTest(support.TempDirTest):
+
+    def test_a_line_starts_with_the_date_and_the_time(self):
+        self.redirect(conky_mouse, LOG='mouse.log')
+        conky_mouse.log('press at 10,20')
+        self.assertRegex(support.read(conky_mouse.LOG),
+                         r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d press at 10,20\n$')
+
+
 if __name__ == '__main__':
     unittest.main()
