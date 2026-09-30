@@ -105,9 +105,13 @@ local function mix(a, b, t)
 end
 
 local function secondary()
-    -- the artist and the times: the foreground a fifth of the way into the background,
-    -- which on Spotify's #181818 is conky.conf's default_color, d0d0d0
-    return mix(fg, bg, 0.2)
+    -- the artist and the times: the foreground up to a fifth of the way into the background
+    -- (on Spotify's #181818 that is d0d0d0), less where that would drop it under Lc 60
+    for t = 0.2, 0.01, -0.02 do
+        local c = mix(fg, bg, t)
+        if contrast(c, bg) >= 60 then return c end
+    end
+    return fg
 end
 
 local function green(target)

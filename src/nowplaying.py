@@ -893,7 +893,7 @@ def main():
             try:
                 text = message(f'widget error: {str(e)[:60]}')
             except Exception:                   # the layout itself is what failed
-                text = f"${{color}}${{font Ubuntu Sans:size=11}}widget error: {esc(str(e))[:60]}\n"
+                text = f"${{lua_parse fg text}}${{font Ubuntu Sans:size=11}}widget error: {esc(str(e))[:60]}\n"
 
         with open(OUT + '.tmp', 'w') as f:
             f.write(text)
