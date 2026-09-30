@@ -172,6 +172,13 @@ left running.
 Afterwards, leave the checkout copy running. Never stop it to start the
 installed copy again; the report says the checkout copy was left running.
 
+The widget's Spotify Web API traffic is the user's, and a lockout takes the
+heart away for up to a day. So a run starts the checkout copy once, not in a
+loop, since each start costs requests, and nothing in a session sends a Web
+API request of its own to test or debug: no `spotify_api.py status` or
+`toggle`, no `curl`. What the widget sent is read from the `api:` lines in
+`nowplaying.log` instead.
+
 A change to documentation, skills or `scripts/` alone owes no run, and the pull
 request says so.
 

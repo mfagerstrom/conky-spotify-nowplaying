@@ -10,7 +10,7 @@ which conky.conf renders through draw.lua's ${lua_parse widget}. It covers:
     regions for conky-mouse.py go to regions.json
   - the heart, minimize and close buttons at the top right (drawn by draw.lua)
   - like state (heart), via spotify_api.py; refreshed on track change, then every 5 s from
-    the Spotify app's files, or every 30 s through the Web API where those cannot be read
+    the Spotify app's files, or every 2 minutes through the Web API where those cannot be read
   - lyrics from LRCLIB (lrclib.net) -> lyrics.txt. draw.lua scrolls synced ones smoothly
     along with playback (previous / current / next line); plain ones, for a track LRCLIB
     has no synced lyrics for, are a static block the mouse wheel scrolls. Each answer is
@@ -18,7 +18,7 @@ which conky.conf renders through draw.lua's ${lua_parse widget}. It covers:
     menu's settings (lyrics_settings.py) turn lyrics off, which collapses their area and
     looks nothing up, or show synced ones statically too.
 """
-import functools, hashlib, json, math, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
+import fcntl, functools, hashlib, json, math, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
 import gi
 gi.require_version('Pango', '1.0'); gi.require_version('PangoCairo', '1.0'); gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Pango, PangoCairo
@@ -36,6 +36,7 @@ COVER = os.path.join(CACHE, 'cover.jpg')
 NO_ART_URL = 'file://' + os.path.join(os.path.dirname(os.path.abspath(__file__)), 'no-art.png')
 REGIONS = os.path.join(CACHE, 'regions.json')
 LOG = os.path.join(CACHE, 'nowplaying.log')
+INSTANCE_LOCK = os.path.join(CACHE, 'nowplaying.lock')   # held by the one copy that runs
 BG = os.path.join(CACHE, 'bg.txt')               # background colour from the album art, for draw.lua
 DRAW = os.path.join(CACHE, 'draw.txt')           # geometry + playback clock for draw.lua
 LYRICS = os.path.join(CACHE, 'lyrics.txt')       # lyric lines for draw.lua, timed when synced
@@ -77,9 +78,10 @@ WINDOW_BUTTON_SIZE = 10                       # minimize / close icons, right of
 WINDOW_BUTTON_PITCH = 22                      # centre to centre, and each one's hit width
 HEART_PITCH = 25                              # heart centre to minimize centre
 HEART_WIDTH = 16                              # the heart draw.lua strokes, as wide as HEART_FONT's ♡
-LIKE_POLL_SECONDS = 30                        # through the Web API
+LIKE_POLL_SECONDS = 120                       # through the Web API
 LOCAL_LIKE_POLL_SECONDS = 5                   # read from the Spotify app's files, which costs nothing
 LIBRARY_PAGE_SECONDS = 15                     # between Liked Songs pages of a full scan
+LIBRARY_POLL_SECONDS = 300                    # between reads of the newest likes otherwise
 METADATA_SETTLE = 0.75                        # s to wait after a track change before lookups
 NO_ART_WAIT = 3                               # s a track with a length waits for art before the placeholder
 
@@ -320,10 +322,7 @@ def _lrclib(path, **params):
 
 
 def log(msg):
-    if os.path.exists(LOG) and os.path.getsize(LOG) > 512 * 1024:
-        os.replace(LOG, LOG + '.1')              # keep the log small: one rotated copy
-    with open(LOG, 'a') as f:
-        f.write(time.strftime('%T ') + msg + '\n')
+    spotify_api.append_log(LOG, msg)
 
 
 def lyrics_cache_path(key):
@@ -849,14 +848,16 @@ def write_lyrics(track_id, shown=True, static=False):
 
 def library_loop():
     """Keeps spotify_api's Liked Songs index fresh (full scan when missing / daily, newest
-    likes every minute), then re-checks the heart so it reflects likes made in the app.
+    likes every LIBRARY_POLL_SECONDS), then re-checks the heart when the index changed, so
+    it reflects likes made in the app.
 
-    A full scan fetches one 50-track page every LIBRARY_PAGE_SECONDS, so it stays far below
-    Spotify's rate limit alongside the heart checks; a 5,000-song library takes about 25
-    minutes. A 429 pauses it without sending anything until the backoff has passed."""
-    paused = False
+    While the Spotify app's Liked Songs can be read, the newest likes are only fetched when
+    the app has a song the index lacks, so steady play sends nothing here. A full scan
+    fetches one 50-track page every LIBRARY_PAGE_SECONDS, so it stays far below Spotify's
+    rate limit alongside the heart checks; a 5,000-song library takes about 25 minutes.
+    A 429 pauses it without sending anything until the backoff has passed."""
+    paused, next_refresh, seen = False, 0.0, None
     while True:
-        scanning = False
         until = spotify_api.rate_limited_until()
         if until:
             offset = spotify_api.scan_offset()
@@ -864,27 +865,52 @@ def library_loop():
                 log(f'library scan paused at offset {offset} until '
                     + time.strftime('%T', time.localtime(until)))
             paused = offset is not None
-        elif os.path.exists(spotify_api.TOKEN_FILE):
+        elif (os.path.exists(spotify_api.TOKEN_FILE) and time.time() >= next_refresh
+              and not spotify_api.library_current()):
             paused = False
+            started = time.time()
+            next_refresh = started + LIBRARY_POLL_SECONDS
             try:
-                started = time.time()
                 lib = spotify_api.refresh_library()
-                scanning = 'scan' in lib
-                if scanning:
+                if 'scan' in lib:
+                    next_refresh = started + LIBRARY_PAGE_SECONDS
                     log(f"library scan: {lib['scan']['offset']} of {lib['total']} indexed, "
                         f"next page in {LIBRARY_PAGE_SECONDS} s")
                 else:
                     if lib['scanned'] >= started:
                         log(f"library scan done: {lib['total']} songs, {len(lib['keys'])} titles")
-                    with state.lock:
-                        state.liked_checked = 0
+                    indexed = (lib['total'], sum(map(len, lib['keys'].values())))
+                    if lib['scanned'] >= started or seen not in (None, indexed):
+                        with state.lock:
+                            state.liked_checked = 0
+                    seen = indexed
             except Exception as e:
                 log(f'library refresh failed: {type(e).__name__}: {e}')
-        time.sleep(LIBRARY_PAGE_SECONDS if scanning else 60)
+        time.sleep(LIBRARY_PAGE_SECONDS)
+
+
+def hold_instance_lock():
+    """Only one copy of the widget polls Spotify against one cache: a second copy (a checkout
+    started beside the installed one, say) waits here until the first exits, rather than
+    doubling the traffic. Returns the open lock file, which must stay open."""
+    os.makedirs(CACHE, exist_ok=True)
+    lock = open(INSTANCE_LOCK, 'a+')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.seek(0)
+        log(f'another copy of the widget is running (pid {lock.read().strip() or "unknown"}); '
+            f'pid {os.getpid()} waits for it to exit')
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        log(f'the other copy exited; pid {os.getpid()} starts')
+    lock.truncate(0)
+    lock.write(str(os.getpid()))
+    lock.flush()
+    return lock
 
 
 def main():
-    os.makedirs(CACHE, exist_ok=True)
+    lock = hold_instance_lock()  # noqa: F841  (held until the process exits)
     threading.Thread(target=library_loop, daemon=True).start()
     while True:
         try:

@@ -88,7 +88,7 @@ those files, while the app runs or not, and sends Spotify nothing to do it, so t
 a like or unlike made in the app within about five seconds, needs no login and works while
 Spotify rate-limits the widget. It looks for the app's cache where the Spotify apt package,
 snap and flatpak keep it. Without those files (Spotify used only on another device, say), or
-when they cannot be read, the heart asks the Spotify Web API instead, every 30 seconds, which needs the login below.
+when they cannot be read, the heart asks the Spotify Web API instead, every two minutes, which needs the login below.
 
 Clicking the heart likes or unlikes the song through the Web API, which needs the login:
 
@@ -112,13 +112,20 @@ only while the app still has it saved. Finding those other releases uses the Web
 needs the login and pauses while Spotify rate-limits the widget; the heart then shows whether
 the app has this exact release saved. After you log in the widget reads
 the whole library slowly in the background, one page of 50 songs every 15 seconds (about 25
-minutes for 5,000 songs), and does the same again once a day. Until the index is complete,
+minutes for 5,000 songs), and does the same again once a day. In between it fetches your
+newest likes every five minutes, or, while it can read the app's Liked Songs, only when the
+app has a song the index lacks. Until the index is complete,
 a song liked only as a different release may show as not liked. The index saves its place
 after every page, so quitting the widget or hitting a rate limit resumes the read rather
 than restarting it.
 
-Spotify's limits for new developer apps are low. If Spotify rate-limits the app, the widget
-stops calling the API until the block lifts. The heart keeps showing what the Spotify app has
+Spotify's limits for new developer apps are low, and a request sent while rate-limited can
+extend the block, so the widget keeps its traffic small. With the app's files readable, steady
+play costs about one request per song the app has not saved (to look for other releases of it,
+remembered across restarts in `lookups.json`), plus the daily library read. Every request is
+logged with its status to `~/.cache/conky-spotify-nowplaying/nowplaying.log` as an `api:` line.
+Only one copy of the widget runs against that cache: a second one waits until the first exits.
+If Spotify rate-limits the app, anywhere, the widget stops calling Spotify until the block lifts. The heart keeps showing what the Spotify app has
 saved, and a click on it only says when likes can be changed again. Without the app's files
 to read, the heart is hidden meanwhile, since it can neither read nor change likes;
 everything else keeps working, and minimize and close stay where they are. It comes back,

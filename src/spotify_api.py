@@ -9,8 +9,9 @@ Whether a track is liked is read from the Spotify app's own Liked Songs on disk
 (spotify_local) where it can be, and from the Web API only where it cannot.
 The refresh token is kept in ~/.config/conky-spotify-nowplaying/spotify-token.json (mode 600).
 The like state for the widget is written to ~/.cache/conky-spotify-nowplaying/liked ("1"/"0").
+Every request sent to Spotify is logged, with its status, to nowplaying.log in the same directory.
 """
-import base64, contextlib, fcntl, hashlib, http.server, json, os, secrets, subprocess, sys, time
+import base64, contextlib, fcntl, hashlib, http.server, json, os, secrets, subprocess, sys, threading, time
 import urllib.error, urllib.parse, urllib.request
 
 import spotify_local
@@ -25,6 +26,8 @@ LOCK_FILE = LIKED_FILE + '.lock'
 LIBRARY_FILE = os.path.join(CACHE_DIR, 'library.json')
 LIBRARY_LOCK = LIBRARY_FILE + '.lock'
 BACKOFF_FILE = os.path.join(CACHE_DIR, 'rate-limited-until')   # epoch seconds, from Retry-After
+LOOKUPS_FILE = os.path.join(CACHE_DIR, 'lookups.json')   # track and album lookups, kept across restarts
+LOG_FILE = os.path.join(CACHE_DIR, 'nowplaying.log')     # shared with the widget, so one log shows every request
 REDIRECT_URI = 'http://127.0.0.1:8888/callback'
 SCOPES = 'user-library-read user-library-modify'
 
@@ -45,6 +48,18 @@ def _read_text(path):
         return f.read()
 
 
+def append_log(path, msg):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
+        os.replace(path, path + '.1')              # keep the log small: one rotated copy
+    with open(path, 'a') as f:
+        f.write(time.strftime('%T ') + msg + '\n')
+
+
+def log(msg):
+    append_log(LOG_FILE, msg)
+
+
 def rate_limited_until():
     try:
         until = float(_read_text(BACKOFF_FILE))
@@ -57,12 +72,47 @@ def client_id():
     return _read_text(CLIENT_ID_FILE).strip()
 
 
+def _send(req):
+    """Sends one request to Spotify and returns the response body. Every request goes
+    through here, so each is logged (method, path, status; never the query or a token), and
+    a 429 from any endpoint records Retry-After, after which nothing is sent until it passes:
+    requests made while rate limited can extend the penalty."""
+    until = rate_limited_until()
+    if until:
+        raise RateLimited(until)
+    url = urllib.parse.urlsplit(req.full_url)
+    what = f"api: {req.get_method()} {'' if url.netloc == 'api.spotify.com' else url.netloc}{url.path}"
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = r.read()
+            status = r.status
+    except urllib.error.HTTPError as e:
+        log(f'{what} {e.code}')
+        if e.code != 429:
+            raise
+        try:
+            wait = int(e.headers.get('Retry-After') or 60)
+        except ValueError:
+            wait = 60
+        until = time.time() + wait
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(BACKOFF_FILE, 'w') as f:
+            f.write(str(until))
+        log(f'api: rate limited for {wait} s, sending nothing until '
+            + time.strftime('%T', time.localtime(until)))
+        raise RateLimited(until) from None
+    except OSError as e:                         # no answer at all: offline, DNS, timeout
+        log(f'{what} {type(e).__name__}')
+        raise
+    log(f'{what} {status}')
+    return body
+
+
 def _post_token(data):
     req = urllib.request.Request('https://accounts.spotify.com/api/token',
                                  data=urllib.parse.urlencode(data).encode(),
                                  headers={'Content-Type': 'application/x-www-form-urlencoded'})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r)
+    return json.loads(_send(req))
 
 
 def _store(tok, old_refresh=None):
@@ -139,24 +189,14 @@ def access_token():
 
 
 def api(method, path, **params):
-    # Requests made while rate limited can extend the penalty, so don't send any.
+    # Checked before access_token(), so a lockout sends no token refresh either.
     until = rate_limited_until()
     if until:
         raise RateLimited(until)
     url = 'https://api.spotify.com/v1' + path + ('?' + urllib.parse.urlencode(params) if params else '')
     req = urllib.request.Request(url, method=method, headers={'Authorization': 'Bearer ' + access_token()})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            body = r.read()
-            return json.loads(body) if body else None
-    except urllib.error.HTTPError as e:
-        if e.code != 429:
-            raise
-        until = time.time() + int(e.headers.get('Retry-After') or 60)
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        with open(BACKOFF_FILE, 'w') as f:
-            f.write(str(until))
-        raise RateLimited(until)
+    body = _send(req)
+    return json.loads(body) if body else None
 
 
 def current_track_uri():
@@ -192,6 +232,40 @@ def is_liked(uri):
 
 _tracks = {}
 _album_upcs = {}
+_lookups_loaded = False
+_lookups_lock = threading.Lock()
+MAX_LOOKUPS = 5000                               # of each; the oldest go first
+
+
+def _load_lookups():
+    """Fills the lookups from disk once per process, so a restart asks Spotify nothing
+    about the tracks it has already seen."""
+    global _lookups_loaded
+    with _lookups_lock:
+        if _lookups_loaded:
+            return
+        _lookups_loaded = True
+        try:
+            saved = json.loads(_read_text(LOOKUPS_FILE))
+            tracks = {uri: tuple(t) for uri, t in saved['tracks'].items()}
+            upcs = dict(saved['upcs'])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return
+        for cache, loaded in ((_tracks, tracks), (_album_upcs, upcs)):
+            cache.update({k: v for k, v in loaded.items() if k not in cache})
+
+
+def _save_lookups():
+    with _lookups_lock:
+        for cache in (_tracks, _album_upcs):
+            for old in list(cache)[:max(len(cache) - MAX_LOOKUPS, 0)]:
+                del cache[old]
+        data = {'tracks': dict(_tracks), 'upcs': dict(_album_upcs)}
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    tmp = f'{LOOKUPS_FILE}.{os.getpid()}.{threading.get_ident()}.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f)
+    os.replace(tmp, LOOKUPS_FILE)
 
 
 def _key(name, artist):
@@ -199,10 +273,12 @@ def _key(name, artist):
 
 
 def _track(uri):
-    """(index key, album ID) for a track, fetched once per process."""
+    """(index key, album ID) for a track, fetched once and kept on disk."""
+    _load_lookups()
     if uri not in _tracks:
         t = api('GET', '/tracks/' + uri.rsplit(':', 1)[1])
         _tracks[uri] = (_key(t['name'], t['artists'][0]['name']), t['album']['id'])
+        _save_lookups()
     return _tracks[uri]
 
 
@@ -211,8 +287,10 @@ def track_key(uri):
 
 
 def _album_upc(album_id):
+    _load_lookups()
     if album_id not in _album_upcs:
         _album_upcs[album_id] = (api('GET', '/albums/' + album_id).get('external_ids') or {}).get('upc')
+        _save_lookups()
     return _album_upcs[album_id]
 
 
@@ -294,6 +372,17 @@ def _scan_page(lib, page):
         del lib['scan']
     _save_library(lib)
     return lib
+
+
+def library_current(max_age=24 * 3600):
+    """Whether a refresh of the index would find nothing to add: it is fresh, no scan is
+    running, and it already holds every song the Spotify app has saved. Only known while
+    the app's Liked Songs can be read; otherwise False, and the caller refreshes on a timer."""
+    saved = spotify_local.saved_tracks()
+    lib = _load_library()
+    if saved is None or not lib or 'scan' in lib or time.time() - lib['scanned'] >= max_age:
+        return False
+    return saved <= {u.rsplit(':', 1)[1] for uris in lib['keys'].values() for u in uris}
 
 
 def scan_offset():

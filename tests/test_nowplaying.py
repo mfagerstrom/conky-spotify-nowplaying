@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import unittest
 import urllib.error
@@ -920,53 +921,108 @@ class LibraryLoopTest(support.TempDirTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def run_loop(self, steps, rate_limited=None, offset=None):
-        """Runs library_loop() for len(steps) turns, refresh_library() returning each step in
-        turn; returns the sleeps it asked for and the refresh mock."""
+    def run_loop(self, steps, turns=None, rate_limited=None, offset=None, current=False):
+        """Runs library_loop() for `turns` turns (default: until every step is used) on a fake
+        clock the sleeps move on, refresh_library() returning each step in turn. Returns the
+        clock times refresh_library() was called at, relative to the start, and the mock."""
+        clock = [1000.0]
+        called = []
+        steps = list(steps)
+        turns = turns or len(steps)
         sleeps = []
 
         def sleep(seconds):
             sleeps.append(seconds)
-            if len(sleeps) == len(steps):
+            clock[0] += seconds
+            if len(sleeps) == turns:
                 raise StopLoop
 
-        api = mock.Mock(TOKEN_FILE=__file__, refresh_library=mock.Mock(side_effect=steps),
-                        rate_limited_until=mock.Mock(side_effect=rate_limited or [None] * len(steps)),
-                        scan_offset=mock.Mock(return_value=offset))
+        def refresh():
+            called.append(clock[0] - 1000.0)
+            step = steps.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            return step
+
+        api = mock.Mock(TOKEN_FILE=__file__, refresh_library=mock.Mock(side_effect=refresh),
+                        rate_limited_until=mock.Mock(side_effect=rate_limited or [None] * turns),
+                        scan_offset=mock.Mock(return_value=offset),
+                        library_current=mock.Mock(return_value=current),
+                        append_log=nowplaying.spotify_api.append_log)
         with mock.patch.object(nowplaying, 'spotify_api', api), \
-                mock.patch.object(nowplaying.time, 'sleep', side_effect=sleep):
+                mock.patch.object(nowplaying.time, 'sleep', side_effect=sleep), \
+                mock.patch.object(nowplaying.time, 'time', side_effect=lambda: clock[0]):
             with self.assertRaises(StopLoop):
                 nowplaying.library_loop()
-        return sleeps, api.refresh_library
+        self.assertEqual(set(sleeps), {nowplaying.LIBRARY_PAGE_SECONDS})
+        return called, api.refresh_library
 
     def log(self):
         return support.read(nowplaying.LOG)
 
-    def test_a_scan_is_paced_page_by_page_then_settles_to_a_minute(self):
+    def test_a_scan_is_paced_page_by_page_then_settles_to_the_poll(self):
+        page, poll = nowplaying.LIBRARY_PAGE_SECONDS, nowplaying.LIBRARY_POLL_SECONDS
         scanning = {'scanned': 0, 'total': 120, 'keys': {}, 'scan': {'offset': 50, 'keys': {}}}
-        done = {'scanned': time.time() + 60, 'total': 120, 'keys': {'a\tx': ['u']}}
-        idle = {'scanned': 1, 'total': 120, 'keys': {'a\tx': ['u']}}
+        done = {'scanned': 1000.0 + page, 'total': 120, 'keys': {'a\tx': ['u']}}
+        idle = {'scanned': 1000.0 + page, 'total': 120, 'keys': {'a\tx': ['u']}}
         self.state.liked_checked = 99.0
-        sleeps, _ = self.run_loop([scanning, done, idle])
-        page = nowplaying.LIBRARY_PAGE_SECONDS
-        self.assertEqual(sleeps, [page, 60, 60])
+        called, _ = self.run_loop([scanning, done, idle], turns=(page + poll) // page + 1)
+        self.assertEqual(called, [0, page, page + poll])
         self.assertIn(f'library scan: 50 of 120 indexed, next page in {page} s', self.log())
         self.assertEqual(self.log().count('library scan done: 120 songs, 1 titles'), 1)
         self.assertEqual(self.state.liked_checked, 0)
 
+    def test_the_heart_is_checked_again_only_when_the_index_changed(self):
+        poll = nowplaying.LIBRARY_POLL_SECONDS
+        turns = poll // nowplaying.LIBRARY_PAGE_SECONDS
+        idle = {'scanned': 1, 'total': 120, 'keys': {'a\tx': ['u']}}
+        self.state.liked_checked = 99.0
+        self.run_loop([idle, dict(idle)], turns=turns * 2)
+        self.assertEqual(self.state.liked_checked, 99.0)
+        grown = {'scanned': 1, 'total': 121, 'keys': {'a\tx': ['u'], 'b\ty': ['v']}}
+        self.run_loop([idle, grown], turns=turns * 2)
+        self.assertEqual(self.state.liked_checked, 0)
+
+    def test_an_index_holding_everything_the_app_has_is_not_refreshed(self):
+        called, refresh = self.run_loop([], turns=100, current=True)
+        refresh.assert_not_called()
+
     def test_a_rate_limit_pauses_without_a_request_and_logs_once(self):
         until = time.time() + 600
-        sleeps, refresh = self.run_loop([None, None], rate_limited=[until, until], offset=100)
+        called, refresh = self.run_loop([], turns=2, rate_limited=[until, until], offset=100)
         refresh.assert_not_called()
-        self.assertEqual(sleeps, [60, 60])
         self.assertEqual(self.log().count('library scan paused at offset 100 until '
                                           + time.strftime('%T', time.localtime(until))), 1)
 
-    def test_a_failed_page_is_logged_and_retried_a_minute_later(self):
-        sleeps, _ = self.run_loop([OSError('offline')])
-        self.assertEqual(sleeps, [60])
+    def test_a_failed_page_is_logged_and_retried_after_the_poll(self):
+        poll = nowplaying.LIBRARY_POLL_SECONDS
+        idle = {'scanned': 1, 'total': 120, 'keys': {}}
+        called, _ = self.run_loop([OSError('offline'), idle], turns=poll // nowplaying.LIBRARY_PAGE_SECONDS + 1)
+        self.assertEqual(called, [0, poll])
         self.assertIn('library refresh failed: OSError: offline', self.log())
 
+
+class InstanceLockTest(support.TempDirTest):
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(nowplaying, LOG='nowplaying.log', INSTANCE_LOCK='nowplaying.lock', CACHE='')
+
+    def test_a_second_copy_waits_until_the_first_exits(self):
+        first = nowplaying.hold_instance_lock()
+        self.assertEqual(support.read(nowplaying.INSTANCE_LOCK), str(os.getpid()))
+        second = []
+        waiter = threading.Thread(target=lambda: second.append(nowplaying.hold_instance_lock()))
+        waiter.start()
+        waiter.join(0.3)
+        self.assertTrue(waiter.is_alive())
+        self.assertIn(f'another copy of the widget is running (pid {os.getpid()})',
+                      support.read(nowplaying.LOG))
+        first.close()                            # the first copy exiting lets its lock go
+        waiter.join(5)
+        self.assertFalse(waiter.is_alive())
+        self.assertIn('the other copy exited', support.read(nowplaying.LOG))
+        second[0].close()
 
 if __name__ == '__main__':
     unittest.main()
