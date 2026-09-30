@@ -58,7 +58,7 @@ CW_BACK_PIXMAP, CW_BACK_PIXEL, CW_BORDER_PIXEL = 1 << 0, 1 << 1, 1 << 3
 CW_OVERRIDE_REDIRECT, CW_COLORMAP = 1 << 9, 1 << 13
 US_POSITION, P_POSITION = 1 << 0, 1 << 2          # XSizeHints flags
 COVER_HOLD = 0.1                                  # s: conky draws every 0.05 s
-OUTLINE, OUTLINE_WIDTH = 0x1db954, 2              # conky.conf's color1; logical px
+OUTLINE, OUTLINE_WIDTH = 0x1db954, 2              # Spotify green; logical px
 EDGE = 6                                          # logical px along the border that resize
 CORNER = 24                                       # how far from a corner both of its edges resize
 # X cursor font shapes (X11/cursorfont.h), by the edges a press there resizes.
