@@ -337,10 +337,13 @@ def refresh_library(max_age=24 * 3600):
 def is_liked_any(uri):
     """What the heart shows: this track, or a same-titled release by the same artist on
     another album product."""
-    if is_liked(uri):
-        return True
     still_saved = spotify_local.saved_tracks()
-    if still_saved is not None and (rate_limited_until() or not os.path.exists(TOKEN_FILE)):
+    if still_saved is None:
+        if is_liked(uri):
+            return True
+    elif uri.rsplit(':', 1)[1] in still_saved:
+        return True
+    elif rate_limited_until() or not os.path.exists(TOKEN_FILE):
         # Other releases are found through the Web API; the app's answer for this one stands.
         return False
     # while a scan runs, what it has gathered so far counts too

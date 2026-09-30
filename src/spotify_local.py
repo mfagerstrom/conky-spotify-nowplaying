@@ -9,9 +9,10 @@ A like in the app writes that key and an unlike writes a deletion for it, into t
 database's write-ahead log first, so the set follows the app's own heart within moments.
 
 The database is only ever read, never locked or written: the app holds LevelDB's lock
-while it runs, so this reads the files directly. Table files (.ldb) never change once
-written, so each is parsed once and its entries kept by name; the log is read again on
-every call. A file the app deletes or is still writing is skipped until the next call.
+while it runs, so this reads the files directly. Table files (.ldb, or .sst from older
+LevelDB versions) never change once written, so each is parsed once and its entries kept
+by name; the log is read again on every call. A file the app deletes or is still writing
+is skipped until the next call.
 """
 import ctypes, glob, os, re, struct, threading, time
 
@@ -26,6 +27,10 @@ _tables = {}                                  # (path, size, mtime) -> {track id
 
 try:
     _snappy = ctypes.CDLL('libsnappy.so.1')
+    _snappy.snappy_uncompressed_length.argtypes = [ctypes.c_char_p, ctypes.c_size_t,
+                                                   ctypes.POINTER(ctypes.c_size_t)]
+    _snappy.snappy_uncompress.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p,
+                                          ctypes.POINTER(ctypes.c_size_t)]
 except OSError:
     _snappy = None
 
@@ -184,7 +189,7 @@ def saved_tracks():
         for name in names:
             path = os.path.join(d, name)
             try:
-                if name.endswith('.ldb'):
+                if name.endswith(('.ldb', '.sst')):      # .sst: tables from older LevelDB
                     st = os.stat(path)
                     key = (path, st.st_size, st.st_mtime)
                     seen.add(key)

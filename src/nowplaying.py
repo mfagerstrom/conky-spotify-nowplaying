@@ -231,19 +231,19 @@ def fetch_liked(track_id):
     local = spotify_api.likes_read_locally()
     if spotify_api.rate_limited_until() and not local:
         return                                   # heart stays unknown (outline) until it lifts
-    uri = None
+    uri, failed = None, False
     try:
         uri = spotify_api.current_track_uri()
         liked = spotify_api.is_liked_any(uri) if uri else None
         line = f"like check: {track_id} uri={uri} liked={liked} from {'the app' if local else 'the Web API'}"
     except Exception as e:
-        liked = None
+        liked, failed = None, True
         line = f'like check failed: {track_id} uri={uri} {type(e).__name__}: {e}'
     with state.lock:
         if state.track != track_id:
             return
-        # Read from the app every few seconds, so only a new answer is logged.
-        changed = liked != state.liked or not local
+        # Read from the app every few seconds, so only a new answer (or a failure) is logged.
+        changed = liked != state.liked or failed or not local
         state.liked = liked
     if changed:
         log(line)

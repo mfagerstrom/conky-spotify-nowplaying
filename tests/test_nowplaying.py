@@ -328,6 +328,12 @@ class FetchLikedTest(support.TempDirTest):
         self.check(local=False)
         self.assertEqual(len(self.log_lines()), 4)
 
+    def test_read_from_the_app_a_failed_check_is_logged_on_a_new_track(self):
+        with mock.patch.object(nowplaying.spotify_api, 'likes_read_locally', return_value=True), \
+                mock.patch.object(nowplaying.spotify_api, 'is_liked_any', side_effect=OSError('offline')):
+            nowplaying.fetch_liked('track1')
+        self.assertIn('like check failed', self.log_lines()[0])
+
 
 class SizeSettingsTest(support.TempDirTest):
     """The size settings change the width and the lyrics' height; the text scale changes

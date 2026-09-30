@@ -123,6 +123,10 @@ class SavedTracksTest(SpotifyLocalTest):
                    [(b'!xmeta#' + saved_key('m' * 22), 4, PUT)])
         self.assertEqual(spotify_local.saved_tracks(), {'a' * 22})
 
+    def test_tables_named_the_older_way_are_read(self):
+        self.table('000001.sst', [(saved_key('a' * 22), 5, PUT)])
+        self.assertEqual(spotify_local.saved_tracks(), {'a' * 22})
+
     def test_compressed_blocks_are_read(self):
         self.table('000001.ldb', [(saved_key('a' * 22), 5, PUT)], compress=True)
         self.assertEqual(spotify_local.saved_tracks(), {'a' * 22})

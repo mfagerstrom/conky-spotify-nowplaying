@@ -324,6 +324,12 @@ class LocalLikesTest(SpotifyApiTest):
             self.assertTrue(spotify_api.is_liked_any('spotify:track:playing'))
         api.assert_not_called()
 
+    def test_the_apps_set_is_read_once_per_check(self):
+        self.log_in()
+        self.app_has('single')
+        spotify_api.is_liked_any('spotify:track:playing')
+        self.assertEqual(spotify_api.spotify_local.saved_tracks.call_count, 1)
+
     def test_the_web_api_answers_when_the_app_cannot(self):
         self.app_has(None)
         with mock.patch.object(spotify_api, 'api', return_value=[True]) as api:
