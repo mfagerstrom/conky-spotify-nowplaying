@@ -86,8 +86,8 @@ Songs, which it keeps in `~/.cache/spotify/Users/<name>-user/primary.ldb`. The w
 those files, while the app runs or not, and sends Spotify nothing to do it, so the heart follows
 a like or unlike made in the app within about five seconds, needs no login and works while
 Spotify rate-limits the widget. It looks for the app's cache where the Spotify apt package,
-snap and flatpak keep it. Without those files (Spotify used only on another device, say) the
-heart asks the Spotify Web API instead, every 30 seconds, which needs the login below.
+snap and flatpak keep it. Without those files (Spotify used only on another device, say), or
+when they cannot be read, the heart asks the Spotify Web API instead, every 30 seconds, which needs the login below.
 
 Clicking the heart likes or unlikes the song through the Web API, which needs the login:
 

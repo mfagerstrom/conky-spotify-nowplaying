@@ -77,7 +77,8 @@ class SpotifyLocalTest(support.TempDirTest):
         super().setUp()
         self.db = os.path.join(self.dir, 'cache', 'spotify', 'Users', 'me-user', 'primary.ldb')
         os.makedirs(self.db)
-        for name, value in (('ROOTS', [os.path.join(self.dir, 'cache', 'spotify')]), ('_found', (0.0, None))):
+        for name, value in (('ROOTS', [os.path.join(self.dir, 'cache', 'spotify')]), ('_found', (0.0, None)),
+                            ('_read', (0.0, False))):
             patcher = mock.patch.object(spotify_local, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -166,6 +167,27 @@ class SavedTracksTest(SpotifyLocalTest):
         spotify_local.ROOTS[:] = [os.path.join(self.dir, 'nowhere')]
         self.assertIsNone(spotify_local.saved_tracks())
         self.assertIsNone(spotify_local.is_saved('spotify:track:' + 'a' * 22))
+
+
+class ReadableTest(SpotifyLocalTest):
+
+    def test_readable_follows_the_last_read(self):
+        self.table('000001.ldb', [(saved_key('a' * 22), 5, PUT)], compress=True)
+        self.assertTrue(spotify_local.readable())
+        with mock.patch.object(spotify_local, '_snappy', None):
+            spotify_local._tables.clear()
+            spotify_local.saved_tracks()
+            self.assertFalse(spotify_local.readable())            # there, but it cannot be read
+
+    def test_readable_reads_when_nothing_has_for_a_while(self):
+        with mock.patch.object(spotify_local, 'saved_tracks', wraps=spotify_local.saved_tracks) as read:
+            self.assertTrue(spotify_local.readable())
+            self.assertTrue(spotify_local.readable())
+        self.assertEqual(read.call_count, 1)
+
+    def test_no_database_is_not_readable(self):
+        spotify_local.ROOTS[:] = [os.path.join(self.dir, 'nowhere')]
+        self.assertFalse(spotify_local.readable())
 
 
 class DatabaseTest(SpotifyLocalTest):

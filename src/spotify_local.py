@@ -23,6 +23,7 @@ _SAVED = re.compile(rb'!cit#cit#.spotify:track:([0-9A-Za-z]{22})#.spotify:user:.
 
 _lock = threading.Lock()
 _found = (0.0, None)                          # (when looked up, database directory or None)
+_read = (0.0, False)                          # (when saved_tracks last ran, whether it read the set)
 _tables = {}                                  # (path, size, mtime) -> {track id: (seq, saved)}
 
 try:
@@ -174,9 +175,24 @@ def _log(path):
     return found
 
 
+def readable():
+    """Whether the app's Liked Songs can be read here: whether the last read worked, with
+    a read of its own when there has been none for FIND_SECONDS."""
+    if time.time() - _read[0] >= FIND_SECONDS:
+        saved_tracks()
+    return _read[1]
+
+
 def saved_tracks():
     """The track IDs saved in the app's Liked Songs, or None when the app's database
     cannot be found or read."""
+    global _read
+    saved = _saved_tracks()
+    _read = (time.time(), saved is not None)
+    return saved
+
+
+def _saved_tracks():
     d = database()
     if not d:
         return None

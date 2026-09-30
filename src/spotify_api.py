@@ -173,7 +173,7 @@ def current_track_uri():
 def likes_read_locally():
     """Whether likes are read from the Spotify app on this machine rather than the Web API,
     so reading them needs neither a login nor Spotify's rate limit."""
-    return spotify_local.database() is not None
+    return spotify_local.readable()
 
 
 def is_liked(uri):
