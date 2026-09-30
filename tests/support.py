@@ -71,6 +71,7 @@ def response(body):
     """A stand-in for the context-managed response urlopen returns, reading `body` (bytes)."""
     r = mock.MagicMock()
     r.__enter__.return_value = io.BytesIO(body)
+    r.__enter__.return_value.status = 200
     return r
 
 

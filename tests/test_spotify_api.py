@@ -1,5 +1,6 @@
 """Tests for spotify_api.py: track keys, the Liked Songs index, time windows, 429 backoff."""
 import os
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -18,11 +19,15 @@ class SpotifyApiTest(support.TempDirTest):
         self.redirect(spotify_api, CONF_DIR='config', CACHE_DIR='cache',
                       TOKEN_FILE='config/spotify-token.json', LIBRARY_FILE='cache/library.json',
                       BACKOFF_FILE='rate-limited-until', LIKED_FILE='liked', LIBRARY_LOCK='cache/library.json.lock',
-                      TOGGLED_FILE='liked-toggled', LOCK_FILE='liked.lock')
+                      TOGGLED_FILE='liked-toggled', LOCK_FILE='liked.lock',
+                      LOOKUPS_FILE='cache/lookups.json', LOG_FILE='cache/nowplaying.log')
         for cache in (spotify_api._tracks, spotify_api._album_upcs):
             patcher = mock.patch.dict(cache, clear=True)
             patcher.start()
             self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(spotify_api, '_lookups_loaded', False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def track(self, uri, key, album=None, upc=...):
         """Answers what the API would say about a track: its key, album and album UPC
@@ -33,7 +38,8 @@ class SpotifyApiTest(support.TempDirTest):
 
     def at(self, when):
         """Freezes spotify_api's clock at `when` for the rest of the test."""
-        patcher = mock.patch.object(spotify_api, 'time', mock.Mock(time=lambda: when))
+        patcher = mock.patch.object(spotify_api, 'time', mock.Mock(
+            time=lambda: when, strftime=time.strftime, localtime=time.localtime))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -439,6 +445,157 @@ class ApiTest(SpotifyApiTest):
             with self.assertRaises(urllib.error.HTTPError):
                 spotify_api.api('GET', '/me/tracks')
         self.assertFalse(os.path.exists(spotify_api.BACKOFF_FILE))
+
+    def test_every_request_is_logged_with_its_status_but_not_its_query(self):
+        with mock.patch('urllib.request.urlopen', return_value=support.response(b'[true]')):
+            spotify_api.api('GET', '/me/library/contains', uris='spotify:track:1')
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(500)):
+            with self.assertRaises(urllib.error.HTTPError):
+                spotify_api.api('DELETE', '/me/library', uris='spotify:track:1')
+        with mock.patch('urllib.request.urlopen', side_effect=urllib.error.URLError('offline')):
+            with self.assertRaises(urllib.error.URLError):
+                spotify_api.api('GET', '/me/tracks')
+        lines = [line[9:] for line in support.read(spotify_api.LOG_FILE).splitlines()]
+        self.assertEqual(lines, ['api: GET /v1/me/library/contains 200', 'api: DELETE /v1/me/library 500',
+                                 'api: GET /v1/me/tracks URLError'])
+
+    def test_a_429_is_logged_with_the_wait(self):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(429, {'Retry-After': '76616'})):
+            with self.assertRaises(spotify_api.RateLimited):
+                spotify_api.api('GET', '/me/tracks')
+        log = support.read(spotify_api.LOG_FILE)
+        self.assertIn('api: GET /v1/me/tracks 429', log)
+        self.assertIn('api: rate limited for 76616 s, sending nothing until', log)
+
+    def test_an_unreadable_retry_after_waits_a_minute(self):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(429, {'Retry-After': 'soon'})):
+            with self.assertRaises(spotify_api.RateLimited) as caught:
+                spotify_api.api('GET', '/me/tracks')
+        self.assertEqual(caught.exception.until, NOW + 60)
+
+
+class TokenTest(SpotifyApiTest):
+    """The token endpoint goes through the same backoff as the Web API."""
+
+    def setUp(self):
+        super().setUp()
+        self.at(NOW)
+        os.makedirs(os.path.dirname(spotify_api.TOKEN_FILE), exist_ok=True)
+        with open(spotify_api.TOKEN_FILE, 'w') as f:
+            f.write('{"access_token": "old", "refresh_token": "r", "expires_at": 0}')
+        patcher = mock.patch.object(spotify_api, 'client_id', return_value='id')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_refresh_is_logged(self):
+        with mock.patch('urllib.request.urlopen',
+                        return_value=support.response(b'{"access_token": "new", "expires_in": 3600}')):
+            self.assertEqual(spotify_api.access_token(), 'new')
+        self.assertIn('api: POST accounts.spotify.com/api/token 200', support.read(spotify_api.LOG_FILE))
+
+    def test_a_429_on_refresh_records_the_backoff_and_blocks_every_request(self):
+        with mock.patch('urllib.request.urlopen', side_effect=support.http_error(429, {'Retry-After': '300'})):
+            with self.assertRaises(spotify_api.RateLimited):
+                spotify_api.access_token()
+        self.assertEqual(float(support.read(spotify_api.BACKOFF_FILE)), NOW + 300)
+        with mock.patch('urllib.request.urlopen') as urlopen:
+            with self.assertRaises(spotify_api.RateLimited):
+                spotify_api.access_token()
+            with self.assertRaises(spotify_api.RateLimited):
+                spotify_api.api('GET', '/me/tracks')
+        urlopen.assert_not_called()
+
+
+class LoginTest(SpotifyApiTest):
+
+    def test_login_during_a_lockout_opens_no_browser(self):
+        self.at(NOW)
+        with open(spotify_api.BACKOFF_FILE, 'w') as f:
+            f.write(str(NOW + 600))
+        with mock.patch.object(spotify_api.subprocess, 'Popen') as popen, \
+                mock.patch('http.server.HTTPServer') as server:
+            with self.assertRaises(spotify_api.RateLimited):
+                spotify_api.login()
+        popen.assert_not_called()
+        server.assert_not_called()
+
+
+class LibraryStampTest(SpotifyApiTest):
+
+    def test_no_index(self):
+        self.assertEqual(spotify_api.library_stamp(), (0.0, None))
+
+    def test_an_index(self):
+        spotify_api._save_library({'scanned': 1, 'total': 3, 'keys': {'a\tx': ['1', '2'], 'b\ty': ['3']}})
+        saved_at, size = spotify_api.library_stamp()
+        self.assertEqual(saved_at, os.path.getmtime(spotify_api.LIBRARY_FILE))
+        self.assertEqual(size, (3, 3))
+
+
+class LookupsTest(SpotifyApiTest):
+
+    def restart(self):
+        """Forgets what this process looked up, as a new process would."""
+        spotify_api._tracks.clear()
+        spotify_api._album_upcs.clear()
+        spotify_api._lookups_loaded = False
+
+    def test_lookups_survive_a_restart(self):
+        track = {'name': 'Song', 'artists': [{'name': 'Artist'}], 'album': {'id': 'a'}}
+        with mock.patch.object(spotify_api, 'api', side_effect=[track, {'external_ids': {'upc': '1'}}]):
+            spotify_api._track('spotify:track:x')
+            spotify_api._album_upc('a')
+        self.restart()
+        with mock.patch.object(spotify_api, 'api') as api:
+            self.assertEqual(spotify_api._track('spotify:track:x'), ('song\tartist', 'a'))
+            self.assertEqual(spotify_api._album_upc('a'), '1')
+        api.assert_not_called()
+
+    def test_the_oldest_lookups_go_past_the_cap(self):
+        with mock.patch.object(spotify_api, 'MAX_LOOKUPS', 2):
+            for n in range(3):
+                spotify_api._tracks[f'spotify:track:{n}'] = ('k', 'a')
+            spotify_api._save_lookups()
+        self.restart()
+        spotify_api._load_lookups()
+        self.assertEqual(list(spotify_api._tracks), ['spotify:track:1', 'spotify:track:2'])
+
+    def test_an_unreadable_file_is_ignored(self):
+        os.makedirs(os.path.dirname(spotify_api.LOOKUPS_FILE), exist_ok=True)
+        with open(spotify_api.LOOKUPS_FILE, 'w') as f:
+            f.write('[1, 2')
+        spotify_api._load_lookups()
+        self.assertEqual(spotify_api._tracks, {})
+
+
+class LibraryCurrentTest(SpotifyApiTest):
+
+    def setUp(self):
+        super().setUp()
+        self.at(NOW)
+        spotify_api._save_library({'scanned': NOW - 60, 'total': 2,
+                                   'keys': {'a\tx': ['spotify:track:1'], 'b\ty': ['spotify:track:2']}})
+
+    def current(self, saved):
+        with mock.patch.object(spotify_api.spotify_local, 'saved_tracks', return_value=saved):
+            return spotify_api.library_current()
+
+    def test_current_when_the_index_holds_every_saved_song(self):
+        self.assertTrue(self.current(frozenset({'1', '2'})))
+        self.assertTrue(self.current(frozenset({'1'})))      # an unlike needs no refresh
+
+    def test_not_current_with_a_song_the_index_lacks(self):
+        self.assertFalse(self.current(frozenset({'1', '2', '3'})))
+
+    def test_not_current_without_the_apps_set(self):
+        self.assertFalse(self.current(None))
+
+    def test_not_current_when_stale_or_scanning(self):
+        spotify_api._save_library({'scanned': NOW - 25 * 3600, 'total': 1, 'keys': {'a\tx': ['spotify:track:1']}})
+        self.assertFalse(self.current(frozenset({'1'})))
+        spotify_api._save_library({'scanned': NOW, 'total': 1, 'keys': {'a\tx': ['spotify:track:1']},
+                                   'scan': {'offset': 0, 'keys': {}}})
+        self.assertFalse(self.current(frozenset({'1'})))
 
 
 class LikedFileTest(SpotifyApiTest):
