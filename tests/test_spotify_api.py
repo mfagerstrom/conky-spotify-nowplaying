@@ -53,12 +53,15 @@ class LogTest(SpotifyApiTest):
     written by log(), start with the date and the time."""
 
     def test_a_line_starts_with_the_date_and_the_time(self):
+        days = {time.strftime('%F')}
         spotify_api.log('like check failed: offline')
         spotify_api.log('library scan done')
+        days.add(time.strftime('%F'))                  # the test may straddle midnight
         lines = support.read(spotify_api.LOG_FILE).splitlines()
         self.assertEqual(len(lines), 2)
         self.assertRegex(lines[0], r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d like check failed: offline$')
         self.assertRegex(lines[1], r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d library scan done$')
+        self.assertIn(lines[0][:10], days)
 
 
 class TrackKeyTest(SpotifyApiTest):

@@ -2,6 +2,7 @@
 resizing (which edges a press drags, and the size settings a drag leads to), and the wheel
 over plain lyrics."""
 import os
+import time
 import unittest
 from unittest import mock
 
@@ -191,9 +192,12 @@ class LogTest(support.TempDirTest):
 
     def test_a_line_starts_with_the_date_and_the_time(self):
         self.redirect(conky_mouse, LOG='mouse.log')
+        days = {time.strftime('%F')}
         conky_mouse.log('press at 10,20')
-        self.assertRegex(support.read(conky_mouse.LOG),
-                         r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d press at 10,20\n$')
+        days.add(time.strftime('%F'))                  # the test may straddle midnight
+        line = support.read(conky_mouse.LOG)
+        self.assertRegex(line, r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d press at 10,20\n$')
+        self.assertIn(line[:10], days)
 
 
 if __name__ == '__main__':

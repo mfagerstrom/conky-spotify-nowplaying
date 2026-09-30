@@ -49,8 +49,8 @@ def _read_text(path):
 
 
 def append_log(path, msg):
-    # Each line carries the date as well as the time: a log spans several days before it
-    # rotates, and a clock that goes backwards is the only other sign of a new one.
+    # Each line carries the date as well as the time, since a log spans several days
+    # before it rotates.
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
         os.replace(path, path + '.1')              # keep the log small: one rotated copy
