@@ -89,21 +89,45 @@ class ArtColourTest(support.TempDirTest):
         _, s, _ = self.hsv(self.cover(lambda x, y: rows[y]))
         self.assertAlmostEqual(s, 0, places=6)
 
-    def test_output_is_always_clamped(self):
+    def test_the_colour_is_a_pixel_on_the_cover(self):
+        # A hue slice spread from dark to bright: its mean would be a colour no pixel has.
+        shades = [(240, 90, 10), (120, 40, 5), (250, 110, 30), (235, 85, 12)]
+        path = self.cover(lambda x, y: shades[(x + y) % 4] if x < 30 else (10, 10, 10))
+        pixel = tuple(round(c * 255) for c in nowplaying.art_colour(path))
+        self.assertIn(pixel, shades)
+
+    def test_a_vivid_orange_is_used_as_it_is(self):
+        # The Somebody Better cover's orange-red: dark text reaches 4.5:1 on it, so no nudge.
+        orange = (0xe2, 0x47, 0x07)
+        rgb = nowplaying.art_colour(self.cover(lambda x, y: orange))
+        self.assertEqual(tuple(round(c * 255) for c in rgb), orange)
+        self.assertGreater(nowplaying.contrast(rgb, nowplaying.DARK_FG),
+                           nowplaying.contrast(rgb, nowplaying.LIGHT_FG))
+
+    def test_mid_gray_moves_only_as_far_as_it_needs(self):
+        gray = (0x77 / 255,) * 3
+        rgb = nowplaying.readable(gray)
+        best = max(nowplaying.contrast(rgb, fg) for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
+        self.assertAlmostEqual(best, nowplaying.MIN_CONTRAST, places=3)
+        self.assertLess(max(abs(a - b) for a, b in zip(rgb, gray)), 0.02)
+
+    def test_a_foreground_always_reaches_the_minimum_contrast(self):
         covers = {
             'white': lambda x, y: (255, 255, 255),
             'black': lambda x, y: (0, 0, 0),
+            'mid gray': lambda x, y: (119, 119, 119),
             'bright yellow': lambda x, y: (255, 240, 0),
             'saturated red': lambda x, y: (255, 0, 0),
+            'green': lambda x, y: (40, 150, 60),
             'dark navy': lambda x, y: (5, 10, 60),
             'gradient': lambda x, y: (x * 5, y * 5, 255 - x * 5),
         }
         for name, pixel in covers.items():
             with self.subTest(name):
-                _, s, v = self.hsv(self.cover(pixel))
-                self.assertLessEqual(s, 0.65 + 1e-9)
-                self.assertGreaterEqual(v, 0.25 - 1e-9)
-                self.assertLessEqual(v, 0.38 + 1e-9)
+                rgb = nowplaying.art_colour(self.cover(pixel))
+                best = max(nowplaying.contrast(rgb, fg)
+                           for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
+                self.assertGreaterEqual(best, nowplaying.MIN_CONTRAST - 1e-6)
 
     def test_update_bg_falls_back_to_spotify_gray_without_a_cover(self):
         self.redirect(nowplaying, COVER='missing.jpg', BG='bg.txt')
@@ -397,7 +421,7 @@ class SizeSettingsTest(support.TempDirTest):
         _, short, _ = self.render((505, 63, 1.0))
         text, long, _ = self.render((505, 63, 1.0), title='A title long enough to need a second line '
                                                           'and then a third one as well')
-        self.assertEqual(text.count('${color2}'), 3)                        # three title lines
+        self.assertEqual(text.count('${lua_parse fg title}'), 3)                        # three title lines
         self.assertGreater(float(long['controls'][3]), float(short['controls'][3]))
         self.assertGreater(float(long['lyrics'][2]), float(short['lyrics'][2]))
 
