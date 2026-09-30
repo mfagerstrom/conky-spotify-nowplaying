@@ -96,20 +96,31 @@ class ArtColourTest(support.TempDirTest):
         pixel = tuple(round(c * 255) for c in nowplaying.art_colour(path))
         self.assertIn(pixel, shades)
 
-    def test_a_vivid_orange_is_used_as_it_is(self):
-        # The Somebody Better cover's orange-red: dark text reaches 4.5:1 on it, so no nudge.
+    def test_a_vivid_orange_is_used_as_it_is_with_white_text(self):
+        # The Somebody Better cover's orange-red: white text reaches Lc 60 on it, so no nudge.
+        # (WCAG 2's ratio would pick dark text here, which reads poorly on it.)
         orange = (0xe2, 0x47, 0x07)
         rgb = nowplaying.art_colour(self.cover(lambda x, y: orange))
         self.assertEqual(tuple(round(c * 255) for c in rgb), orange)
-        self.assertGreater(nowplaying.contrast(rgb, nowplaying.DARK_FG),
-                           nowplaying.contrast(rgb, nowplaying.LIGHT_FG))
+        self.assertGreater(nowplaying.contrast(nowplaying.LIGHT_FG, rgb),
+                           nowplaying.contrast(nowplaying.DARK_FG, rgb))
 
-    def test_mid_gray_moves_only_as_far_as_it_needs(self):
-        gray = (0x77 / 255,) * 3
-        rgb = nowplaying.readable(gray)
-        best = max(nowplaying.contrast(rgb, fg) for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
-        self.assertAlmostEqual(best, nowplaying.MIN_CONTRAST, places=3)
-        self.assertLess(max(abs(a - b) for a, b in zip(rgb, gray)), 0.02)
+    def test_a_light_colour_gets_dark_text(self):
+        yellow = (250 / 255, 225 / 255, 60 / 255)
+        self.assertGreater(nowplaying.contrast(nowplaying.DARK_FG, yellow),
+                           nowplaying.contrast(nowplaying.LIGHT_FG, yellow))
+
+    def test_a_middle_band_colour_moves_only_as_far_as_it_needs(self):
+        # Spotify green: neither white nor the dark foreground reaches Lc 60 on it.
+        green = (0x1e / 255, 0xb9 / 255, 0x54 / 255)
+        self.assertLess(max(nowplaying.contrast(fg, green)
+                            for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG)),
+                        nowplaying.MIN_CONTRAST)
+        rgb = nowplaying.readable(green)
+        best = max(nowplaying.contrast(fg, rgb) for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
+        self.assertAlmostEqual(best, nowplaying.MIN_CONTRAST, places=2)
+        self.assertLess(max(abs(a - b) for a, b in zip(rgb, green)), 0.05)
+        self.assertAlmostEqual(colorsys.rgb_to_hls(*rgb)[0], colorsys.rgb_to_hls(*green)[0], places=6)
 
     def test_a_foreground_always_reaches_the_minimum_contrast(self):
         covers = {
@@ -125,7 +136,7 @@ class ArtColourTest(support.TempDirTest):
         for name, pixel in covers.items():
             with self.subTest(name):
                 rgb = nowplaying.art_colour(self.cover(pixel))
-                best = max(nowplaying.contrast(rgb, fg)
+                best = max(nowplaying.contrast(fg, rgb)
                            for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
                 self.assertGreaterEqual(best, nowplaying.MIN_CONTRAST - 1e-6)
 

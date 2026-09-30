@@ -17,7 +17,7 @@ local hover_x, hover_y = -1, -1
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
 -- Foreground: white on dark or saturated backgrounds, near-black on light ones, whichever
 -- contrasts more with the background as it fades (nowplaying.py's LIGHT_FG and DARK_FG).
--- nowplaying.py nudges the backgrounds it picks until one of the two reaches 4.5:1.
+-- nowplaying.py nudges the backgrounds it picks until one of the two reaches APCA Lc 60.
 local LIGHT, DARK = {1, 1, 1}, {0.07, 0.07, 0.07}
 local GREEN = {0x1d / 255, 0xb9 / 255, 0x54 / 255}   -- Spotify green, conky.conf's color1
 local fg, fg_back = LIGHT, DARK           -- fg_back: drawn on fg, like the play icon
@@ -81,18 +81,23 @@ end
 
 -- Background ---------------------------------------------------------------------------
 
-local function luminance(c)
-    -- WCAG relative luminance, channels 0-1
-    local t = {}
-    for i = 1, 3 do
-        t[i] = c[i] <= 0.04045 and c[i] / 12.92 or ((c[i] + 0.055) / 1.055) ^ 2.4
-    end
-    return 0.2126 * t[1] + 0.7152 * t[2] + 0.0722 * t[3]
+local function apca_y(c)
+    -- APCA's screen luminance, soft-clamped near black (nowplaying.py's apca_y)
+    local y = 0.2126729 * c[1] ^ 2.4 + 0.7151522 * c[2] ^ 2.4 + 0.0721750 * c[3] ^ 2.4
+    if y < 0.022 then y = y + (0.022 - y) ^ 1.414 end
+    return y
 end
 
-local function contrast(a, b)
-    local la, lb = luminance(a), luminance(b)
-    return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05)
+local function contrast(text, back)
+    -- APCA lightness contrast of text on back as |Lc|, as nowplaying.py's contrast
+    local yt, yb = apca_y(text), apca_y(back)
+    if math.abs(yb - yt) < 0.0005 then return 0 end
+    if yb > yt then
+        local sapc = (yb ^ 0.56 - yt ^ 0.57) * 1.14
+        return sapc < 0.1 and 0 or (sapc - 0.027) * 100
+    end
+    local sapc = (yb ^ 0.65 - yt ^ 0.62) * 1.14
+    return sapc > -0.1 and 0 or -(sapc + 0.027) * 100
 end
 
 local function mix(a, b, t)
@@ -126,7 +131,7 @@ local function fade()
     local target = {tonumber(r) or 0.094, tonumber(g) or 0.094, tonumber(b) or 0.094}
     local k = 1 - math.exp(-dt() * 3)
     for i = 1, 3 do bg[i] = bg[i] + (target[i] - bg[i]) * k end
-    if contrast(bg, LIGHT) >= contrast(bg, DARK) then fg, fg_back = LIGHT, DARK else fg, fg_back = DARK, LIGHT end
+    if contrast(LIGHT, bg) >= contrast(DARK, bg) then fg, fg_back = LIGHT, DARK else fg, fg_back = DARK, LIGHT end
 end
 
 function conky_widget()
@@ -251,7 +256,7 @@ local function draw_heart(cr, h, s)
     cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND)
     cairo_set_line_width(cr, 1.5 * s)
     if h[4] == 1 then
-        set(cr, green(3))                                -- 3:1, WCAG's floor for icons
+        set(cr, green(45))                               -- Lc 45, APCA's floor for icons
         cairo_fill_preserve(cr)
     else
         set(cr, fg, on and 1 or 0.7)
@@ -268,7 +273,7 @@ local function draw_bar(cr, b, s, pos)
     local fx = x0 + (x1 - x0) * fraction
     set(cr, fg, 0.3)                                                    -- track
     rounded_line(cr, x0, y, x1, y, 4 * s)
-    set(cr, active and green(3) or fg)                                  -- Spotify green
+    set(cr, active and green(45) or fg)                                  -- Spotify green
     if fx > x0 then rounded_line(cr, x0, y, fx, y, 4 * s) end
     if active then                                                      -- knob
         set(cr, fg)
@@ -283,7 +288,7 @@ local function draw_label(cr, l, s, text)
     -- LABEL_FONT), the tops of its capitals on the given line
     cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD)
     cairo_set_font_size(cr, 10 * text * 96 / 72 * s)
-    set(cr, green(4.5))
+    set(cr, green(60))
     local ext = cairo_text_extents_t:create()
     cairo_text_extents(cr, 'NOW PLAYING', ext)
     cairo_move_to(cr, l[1] * s, l[2] * s - ext.y_bearing)

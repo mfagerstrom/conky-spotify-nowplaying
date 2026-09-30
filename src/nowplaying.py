@@ -160,26 +160,34 @@ state = State()
 
 
 LIGHT_FG, DARK_FG = (1.0, 1.0, 1.0), (0.07, 0.07, 0.07)   # draw.lua's two foregrounds
-MIN_CONTRAST = 4.5                        # WCAG's floor for small text: the lyrics
+MIN_CONTRAST = 60                         # APCA Lc: its floor for body text, like the lyrics
 
 
-def luminance(rgb):
-    """WCAG relative luminance of an sRGB colour, channels 0-1."""
-    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
-    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+def apca_y(rgb):
+    """APCA's screen luminance of an sRGB colour (channels 0-1), soft-clamped near black."""
+    y = 0.2126729 * rgb[0] ** 2.4 + 0.7151522 * rgb[1] ** 2.4 + 0.0721750 * rgb[2] ** 2.4
+    return y + (0.022 - y) ** 1.414 if y < 0.022 else y
 
 
-def contrast(a, b):
-    """WCAG contrast ratio of two colours, 1 to 21."""
-    la, lb = sorted((luminance(a), luminance(b)), reverse=True)
-    return (la + 0.05) / (lb + 0.05)
+def contrast(text, bg):
+    """APCA (APCA-W3 0.0.98G) lightness contrast of text on bg, as |Lc|, 0 to about 108.
+    Unlike WCAG 2's ratio it weighs text polarity, so white on a saturated red or orange
+    rates well above the dark text WCAG 2 would pick there."""
+    yt, yb = apca_y(text), apca_y(bg)
+    if abs(yb - yt) < 0.0005:
+        return 0.0
+    if yb > yt:                                  # dark text on a lighter background
+        sapc = (yb ** 0.56 - yt ** 0.57) * 1.14
+        return 0.0 if sapc < 0.1 else (sapc - 0.027) * 100
+    sapc = (yb ** 0.65 - yt ** 0.62) * 1.14     # light text on a darker background
+    return 0.0 if sapc > -0.1 else -(sapc + 0.027) * 100
 
 
 def readable(rgb):
     """rgb as it is when white or the dark foreground reaches MIN_CONTRAST on it (draw.lua
     draws in whichever contrasts more). In the middle band where neither does, its lightness
     moves only as far as one of them needs, towards whichever needs the smaller move."""
-    if max(contrast(rgb, LIGHT_FG), contrast(rgb, DARK_FG)) >= MIN_CONTRAST:
+    if max(contrast(LIGHT_FG, rgb), contrast(DARK_FG, rgb)) >= MIN_CONTRAST:
         return rgb
     h, l, s = colorsys.rgb_to_hls(*rgb)
 
@@ -188,7 +196,7 @@ def readable(rgb):
         near = l
         for _ in range(30):
             mid = (near + far) / 2
-            if contrast(colorsys.hls_to_rgb(h, mid, s), fg) >= MIN_CONTRAST:
+            if contrast(fg, colorsys.hls_to_rgb(h, mid, s)) >= MIN_CONTRAST:
                 far = mid
             else:
                 near = mid
