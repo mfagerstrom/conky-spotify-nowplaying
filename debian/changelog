@@ -1,3 +1,19 @@
+conky-spotify-nowplaying (1.5.0) resolute; urgency=medium
+
+  * The widget's background keeps the cover's own colour instead of
+    darkening it towards brown, and the text switches between black and
+    white to stay readable on it.
+  * The liked heart, NOW PLAYING and the active seek bar are drawn in
+    the same black or white as the text instead of Spotify green, so
+    they no longer clash with the background.
+  * The widget sends far fewer requests to the Spotify Web API and backs
+    off as soon as Spotify rate limits it, to avoid day-long lockouts; a
+    lockout in force is reported when you log in.
+  * Every line in nowplaying.log and mouse.log starts with the date as
+    well as the time.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Wed, 30 Sep 2026 15:23:24 -0400
+
 conky-spotify-nowplaying (1.4.0) resolute; urgency=medium
 
   * The heart is read from the Spotify app's own Liked Songs on your
