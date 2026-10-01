@@ -3,7 +3,8 @@
 --                 4x a second; its scale line is the display's scale, the lyrics' text scale
 --                 and the times', its shadow line the margin around the card
 --   lyrics.txt    lyric lines, rewritten when the track's lyrics change: timed under a
---                 'synced' header, untimed under 'plain'
+--                 'synced' header, untimed under 'plain'; a line with text Ubuntu Sans lacks
+--                 (CJK, say) lists the font each run of it is drawn in
 --   lyrics-scroll the plain lyrics' line offset, which conky-mouse.py sets with the wheel
 --   bg.txt        background colour picked from the album art
 --   widget.txt    conky's markup, which conky.conf shows through conky_widget
@@ -50,11 +51,27 @@ local function load_draw()
     return d
 end
 
+local FONT = 'Ubuntu Sans'                -- nowplaying.py's LYRIC_FONT's family
+
+local function lyric_runs(line)
+    -- '<text>' or '<text>\t<bytes> <family>\t...' (nowplaying.py's lyric_line) as
+    -- {{text, family}, ...}: Cairo's simple text API has no font fallback, so nowplaying.py
+    -- picks the font for each run with Pango's
+    local text, rest = line:match('^([^\t]*)(.*)$')
+    local runs, pos = {}, 1
+    for n, family in rest:gmatch('\t(%d+) ([^\t]+)') do
+        runs[#runs + 1] = {text:sub(pos, pos + n - 1), family}
+        pos = pos + n
+    end
+    if pos <= #text then runs[#runs + 1] = {text:sub(pos), FONT} end
+    return runs
+end
+
 local function load_lyrics(version)
     if version == lyrics.version then return end
     local text = read('lyrics.txt') or ''
     local lines = {}
-    for t, l in text:gmatch('\n([%d%.]*)\t([^\n]*)') do lines[#lines + 1] = {tonumber(t), l} end
+    for t, l in text:gmatch('\n([%d%.]*)\t([^\n]*)') do lines[#lines + 1] = {tonumber(t), lyric_runs(l)} end
     lyrics = {version = version, lines = lines, plain = text:match('^plain\n') ~= nil}
     scroll = nil
 end
@@ -353,35 +370,57 @@ local function draw_times(cr, t, s, text, pos, duration)
     cairo_show_text(cr, total)
 end
 
-local function ellipsize(cr, text, width)
-    local ext = cairo_text_extents_t:create()
-    cairo_text_extents(cr, text, ext)
-    if ext.x_advance <= width then return text end
-    while #text > 0 do
-        text = text:gsub('[%z\1-\127\194-\244][\128-\191]*$', '')    -- drop one UTF-8 char
-        cairo_text_extents(cr, text .. '…', ext)
-        if ext.x_advance <= width then return text .. '…' end
+local function each_part(runs, fn)
+    -- fn(text, family) for each part of the runs in the font it is drawn in: Ubuntu Sans has
+    -- no music notes, so ♪/♫/♬ in its runs go to Noto Music, made for them
+    for _, run in ipairs(runs) do
+        local text, family, pos = run[1], run[2], 1
+        while pos <= #text do
+            local a, b = nil, nil
+            if family == FONT then a, b = text:find('[\226][\153][\170\171\172]+', pos) end   -- U+266A..U+266C
+            local plain = text:sub(pos, (a or #text + 1) - 1)
+            if #plain > 0 then fn(plain, family) end
+            if not a then break end
+            fn(text:sub(a, b), 'Noto Music')
+            pos = b + 1
+        end
     end
-    return '…'
 end
 
-local function show_text_with_notes(cr, text, bold)
-    -- Cairo's simple text API has no font fallback and Ubuntu Sans has no music notes,
-    -- so draw ♪/♫/♬ runs in Noto Music, made for them, and everything else in Ubuntu Sans.
-    local weight = bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL
-    local pos = 1
-    while pos <= #text do
-        local a, b = text:find('[\226][\153][\170\171\172]', pos)   -- U+266A..U+266C
-        local plain = text:sub(pos, (a or #text + 1) - 1)
-        if #plain > 0 then
-            cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, weight)
-            cairo_show_text(cr, plain)
-        end
-        if not a then break end
-        cairo_select_font_face(cr, 'Noto Music', CAIRO_FONT_SLANT_NORMAL, weight)
-        cairo_show_text(cr, text:sub(a, b))
-        pos = b + 1
+local run_ext = cairo_text_extents_t:create()   -- advance's, which ellipsize calls a lot
+
+local function advance(cr, runs, weight)
+    -- how far the runs reach, each in its font
+    local w = 0
+    each_part(runs, function(text, family)
+        cairo_select_font_face(cr, family, CAIRO_FONT_SLANT_NORMAL, weight)
+        cairo_text_extents(cr, text, run_ext)
+        w = w + run_ext.x_advance
+    end)
+    return w
+end
+
+local function ellipsize(cr, runs, width, weight)
+    -- the runs, cut a character at a time with an ellipsis until they fit in width
+    if advance(cr, runs, weight) <= width then return runs end
+    local cut = {}
+    for i, run in ipairs(runs) do cut[i] = {run[1], run[2]} end
+    while #cut > 0 do
+        local last = cut[#cut]
+        last[1] = last[1]:gsub('[%z\1-\127\194-\244][\128-\191]*$', '')   -- drop one UTF-8 char
+        if last[1] == '' then cut[#cut] = nil end
+        cut[#cut + 1] = {'…', FONT}
+        if advance(cr, cut, weight) <= width then return cut end
+        cut[#cut] = nil
     end
+    return {{'…', FONT}}
+end
+
+local function show_runs(cr, runs, weight)
+    each_part(runs, function(text, family)
+        cairo_select_font_face(cr, family, CAIRO_FONT_SLANT_NORMAL, weight)
+        cairo_show_text(cr, text)
+    end)
 end
 
 local function draw_lyrics(cr, l, s, text, pos)
@@ -411,15 +450,13 @@ local function draw_lyrics(cr, l, s, text, pos)
         local dist = math.abs(i - scroll)
         local a = 1 - math.min(dist, 1) * 0.45
         if dist > edge then a = a * math.max(0, (edge + 0.5 - dist) / 0.5) end   -- fade out past it
-        local bold = i == idx
-        cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL,
-                               bold and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL)
+        local weight = i == idx and CAIRO_FONT_WEIGHT_BOLD or CAIRO_FONT_WEIGHT_NORMAL
         -- 11 pt, growing smoothly to 13 pt as a line scrolls into the middle (current) row
         local pt = (11 + 2 * math.max(0, 1 - dist)) * text
         cairo_set_font_size(cr, pt * 96 / 72 * s)
         set(cr, fg, a)
         cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row
-        show_text_with_notes(cr, ellipsize(cr, lines[i][2], x1 - x0), bold)
+        show_runs(cr, ellipsize(cr, lines[i][2], x1 - x0, weight), weight)
     end
     -- Paint the lines through a mask that leaves the top and bottom lines half visible: clear
     -- for half a row at each edge, then fading in over the row after that.
@@ -479,14 +516,14 @@ local function draw_plain_lyrics(cr, l, s, text)
     cairo_save(cr)
     cairo_rectangle(cr, x0, top, x1 - x0, height)
     cairo_clip(cr)
-    cairo_select_font_face(cr, 'Ubuntu Sans', CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL)
     cairo_set_font_size(cr, 11 * text * 96 / 72 * s)
     set(cr, fg)
     local first = math.max(1, math.floor(scroll) + 1)
     for i = first, math.min(#lines, first + math.ceil(rows)) do
         local y = top + (i - 1 - scroll + 0.5) * row                       -- the row's middle
         cairo_move_to(cr, x0, y + row * 0.28)                             -- baseline in the row
-        show_text_with_notes(cr, ellipsize(cr, lines[i][2], x1 - x0), false)
+        local weight = CAIRO_FONT_WEIGHT_NORMAL
+        show_runs(cr, ellipsize(cr, lines[i][2], x1 - x0, weight), weight)
     end
     cairo_restore(cr)
 end

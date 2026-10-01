@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+import unicodedata
 import unittest
 import urllib.error
 from unittest import mock
@@ -279,6 +280,85 @@ class LuaContrastTest(unittest.TestCase):
                 self.assertAlmostEqual(g_, w, places=4)
 
 
+def has_cjk_font():
+    return bool(subprocess.run(['fc-list', ':lang=ja'], capture_output=True, text=True).stdout.strip())
+
+
+@unittest.skipUnless(shutil.which('lua5.3'), 'lua5.3 is not installed')
+class LuaLyricRunsTest(unittest.TestCase):
+    """draw.lua reads the runs nowplaying.py's lyric_line writes, and draws each part in
+    its font, notes in Noto Music."""
+
+    def parts(self, line):
+        with open(os.path.join(support.SRC, 'draw.lua')) as f:
+            src = f.read()
+        consts = re.search(r'^local FONT = .*$', src, re.M).group(0)
+        funcs = src[src.index('local function lyric_runs'):src.index('local function load_lyrics')]
+        funcs += src[src.index('local function each_part'):src.index('local run_ext')]
+        call = (f"each_part(lyric_runs({json.dumps(line, ensure_ascii=False)}), function(t, f) "
+                "io.write(t, '|', f, '\\n') end)")
+        out = subprocess.run(['lua5.3', '-'], input='\n'.join([consts, funcs, call]),
+                             capture_output=True, text=True, check=True).stdout
+        return [tuple(p.split('|')) for p in out.splitlines()]
+
+    def test_runs_are_drawn_in_their_fonts(self):
+        line = nowplaying.lyric_line('♫ 夜に駆ける feat. ミク ♪')
+        if '\t' not in line:
+            self.skipTest('no CJK font installed')
+        parts = self.parts(line)
+        self.assertEqual(''.join(t for t, _ in parts), '♫ 夜に駆ける feat. ミク ♪')
+        fonts = {t.strip(): f for t, f in parts}
+        self.assertEqual(fonts['♫'], 'Noto Music')
+        self.assertEqual(fonts['♪'], 'Noto Music')
+        self.assertEqual(fonts['feat.'], 'Ubuntu Sans')
+        self.assertNotEqual(fonts['夜に駆ける'], 'Ubuntu Sans')
+
+    def test_a_line_without_runs_is_ubuntu_sans_with_notes_in_noto_music(self):
+        self.assertEqual(self.parts('♫ Группа крови'), [('♫', 'Noto Music'), (' Группа крови', 'Ubuntu Sans')])
+
+    def ellipsized(self, runs, width):
+        """draw.lua's ellipsize on runs, with every character one unit wide."""
+        with open(os.path.join(support.SRC, 'draw.lua')) as f:
+            src = f.read()
+        consts = re.search(r'^local FONT = .*$', src, re.M).group(0)
+        stub = ("local function advance(cr, runs) local w = 0 for _, r in ipairs(runs) do "
+                "w = w + utf8.len(r[1]) end return w end")
+        func = src[src.index('local function ellipsize'):src.index('local function show_runs')]
+        lua_runs = '{' + ', '.join(f'{{{json.dumps(t, ensure_ascii=False)}, {json.dumps(f)}}}'
+                                   for t, f in runs) + '}'
+        call = (f"for _, r in ipairs(ellipsize(nil, {lua_runs}, {width})) do "
+                "io.write(r[1], '|', r[2], '\\n') end")
+        out = subprocess.run(['lua5.3', '-'], input='\n'.join([consts, stub, func, call]),
+                             capture_output=True, text=True, check=True).stdout
+        return [tuple(p.split('|')) for p in out.splitlines()]
+
+    def test_ellipsize_cuts_whole_characters_across_runs(self):
+        runs = [('夜に駆ける', 'Noto Sans CJK JP'), (' feat. ', 'Ubuntu Sans')]
+        self.assertEqual(self.ellipsized(runs, 12), runs)                     # fits: as it is
+        self.assertEqual(self.ellipsized(runs, 8),
+                         [('夜に駆ける', 'Noto Sans CJK JP'), (' f', 'Ubuntu Sans'), ('…', 'Ubuntu Sans')])
+        # the second run emptied away, the cut goes on into the first
+        self.assertEqual(self.ellipsized(runs, 4), [('夜に駆', 'Noto Sans CJK JP'), ('…', 'Ubuntu Sans')])
+        self.assertEqual(self.ellipsized(runs, 0), [('…', 'Ubuntu Sans')])
+
+
+class DisplayTextTest(unittest.TestCase):
+
+    def test_format_characters_are_dropped(self):
+        # Spotify's title for Wildfire by Wasia Project starts with U+2060 WORD JOINER.
+        for text in ('\u2060Wildfire', 'Wild\u200bfire', '\ufeffWildfire', 'Wildfire\u200e',
+                     '\u200c\u200dWild\u200ffire\u00ad'):
+            with self.subTest(text=ascii(text)):
+                self.assertEqual(nowplaying.display_text(text), 'Wildfire')
+
+    def test_control_characters_become_spaces(self):
+        self.assertEqual(nowplaying.display_text('a\tb\x07c'), 'a b c')
+
+    def test_other_scripts_are_left_alone(self):
+        for text in ('夜に駆ける', '晴天', '告白氣球', '공허해', 'Группа крови', '♫ intro'):
+            self.assertEqual(nowplaying.display_text(text), text)
+
+
 class WrapTest(unittest.TestCase):
     FONT = nowplaying.TITLE_FONT
 
@@ -304,6 +384,69 @@ class WrapTest(unittest.TestCase):
     def test_text_that_fits_gets_no_ellipsis(self):
         lines = nowplaying.wrap('Two short words', self.FONT, max_lines=1)
         self.assertEqual(lines, ['Two short words'])
+
+    # Japanese and Chinese have no spaces to break at, so whole lines of them break between
+    # characters; Russian breaks between words.
+    OTHER_SCRIPTS = {
+        'japanese': '残酷な天使のテーゼ 夜に駆ける 千本桜 うっせぇわ 紅蓮華 炎 白日 ドライフラワー',
+        'chinese': '告白氣球晴天稻香七里香青花瓷夜曲擱淺簡單愛以父之名東風破龍捲風',
+        'russian': 'Группа крови на рукаве, мой порядковый номер на рукаве',
+    }
+
+    def test_other_scripts_wrap_between_characters_and_fit(self):
+        for name, text in self.OTHER_SCRIPTS.items():
+            with self.subTest(name):
+                lines = nowplaying.wrap(text, self.FONT, width=150, max_lines=20)
+                self.assertGreater(len(lines), 1)
+                self.assertEqual(''.join(lines).replace(' ', ''), text.replace(' ', ''))
+                for line in lines:
+                    self.assertNotIn('\ufffd', line)
+                    self.assertLessEqual(nowplaying.text_width(line, self.FONT), 150)
+
+    def test_other_scripts_are_ellipsized_on_a_whole_character(self):
+        for name, text in self.OTHER_SCRIPTS.items():
+            with self.subTest(name):
+                lines = nowplaying.wrap(text * 3, self.FONT, max_lines=2)
+                self.assertEqual(len(lines), 2)
+                self.assertTrue(lines[-1].endswith('…'))
+                self.assertTrue((text * 3).replace(' ', '').startswith(''.join(lines)[:-1].replace(' ', '')))
+                self.assertNotIn('\ufffd', ''.join(lines))
+
+
+class FontRunsTest(unittest.TestCase):
+    FONT = nowplaying.TITLE_FONT
+
+    def test_runs_cover_the_text_in_order(self):
+        for text in ('千本桜 feat. 初音ミク', '공허해 WINNER', 'Группа крови', 'Plain title', 'a ♫ b'):
+            with self.subTest(text):
+                runs = nowplaying.font_runs(text, self.FONT)
+                self.assertEqual(''.join(part for _, part in runs), text)
+                for (a, _), (b, _) in zip(runs, runs[1:]):
+                    self.assertNotEqual(a, b)          # neighbours in one font are one run
+
+    def test_latin_and_cyrillic_stay_in_ubuntu_sans(self):
+        for text in ('Plain title', 'Группа крови — Кино'):
+            self.assertEqual(nowplaying.font_runs(text, self.FONT), [('Ubuntu Sans', text)])
+
+    @unittest.skipUnless(has_cjk_font(), 'no CJK font installed')
+    def test_cjk_falls_back_to_a_font_that_has_it(self):
+        runs = dict((part.strip(), family) for family, part in nowplaying.font_runs('千本桜 feat. ミク', self.FONT))
+        self.assertEqual(runs['feat.'], 'Ubuntu Sans')
+        for cjk in ('千本桜', 'ミク'):
+            self.assertNotEqual(runs[cjk], 'Ubuntu Sans')
+        cjk = nowplaying.font_runs('千本桜', self.FONT)
+        self.assertEqual(nowplaying.conky_text(cjk, self.FONT), f"${{font {runs['千本桜']}:bold:size=17}}千本桜")
+        # conky's line is as tall as its tallest font, and CJK fonts stand taller
+        self.assertGreater(nowplaying.text_height(cjk, self.FONT), nowplaying.line_height(self.FONT))
+        latin = nowplaying.font_runs('Title', self.FONT)
+        self.assertEqual(nowplaying.text_height(latin, self.FONT), nowplaying.line_height(self.FONT))
+
+    def test_an_empty_line_still_sets_its_font(self):
+        # A title of nothing but format characters wraps to one empty line, which conky must
+        # still draw at the title font's height, as text_height counts it.
+        runs = nowplaying.font_runs(nowplaying.display_text('\u2060'), self.FONT)
+        self.assertEqual(nowplaying.conky_text(runs, self.FONT), f'${{font {nowplaying.conky_font(self.FONT)}}}')
+        self.assertEqual(nowplaying.text_height(runs, self.FONT), nowplaying.line_height(self.FONT))
 
 
 class FormattingTest(unittest.TestCase):
@@ -357,6 +500,21 @@ class WindowButtonsTest(support.TempDirTest):
 
     def assert_left_of(self, a, b):
         self.assertLessEqual(a[2], b[0], f'{a} overlaps or is right of {b}')
+
+    def test_format_characters_never_reach_conky(self):
+        text, _, _ = self.render('Playing', title='\u2060Wildfire', artist='Wasia\u200b Project\ufeff')
+        title_font = nowplaying.conky_font(nowplaying.TITLE_FONT)
+        self.assertIn(f'${{font {title_font}}}Wildfire${{font', text)
+        self.assertIn('Wasia Project${font', text)
+        self.assertFalse(any(unicodedata.category(c) == 'Cf' for c in text))
+
+    @unittest.skipUnless(has_cjk_font(), 'no CJK font installed')
+    def test_a_cjk_title_is_drawn_in_its_fallback_font_and_moves_the_controls_no_higher(self):
+        _, regions, _ = self.render('Playing', title='Title', artist='Artist')
+        text, cjk, _ = self.render('Playing', title='残酷な天使のテーゼ', artist='高橋洋子')
+        family = nowplaying.font_runs('残酷な天使のテーゼ', nowplaying.TITLE_FONT)[0][0]
+        self.assertIn(f'${{font {family}:bold:size=17}}残酷な天使のテーゼ', text)
+        self.assertGreaterEqual(cjk['play'][1], regions['play'][1])
 
     def test_a_hash_in_the_title_or_artist_reaches_conky_escaped(self):
         # Unescaped, conky reads '#5' to the end of its line as a comment, title and font.
@@ -978,6 +1136,32 @@ class WriteLyricsTest(support.TempDirTest):
         # draw.lua draws lyrics.txt with cairo, so conky never reads its lines as markup.
         self.write({'synced': [(0.0, '#1 on the chart'), (2.0, 'C# minor')]})
         self.assertEqual(support.read(nowplaying.LYRICS), 'synced\n0.00\t#1 on the chart\n2.00\tC# minor\n')
+
+    def test_format_characters_are_dropped_from_lyric_lines(self):
+        self.write({'synced': [(1.0, '\u2060Wildfire'), (2.0, '\u200b'), (3.0, 'a\tb')]})
+        self.assertEqual(support.read(nowplaying.LYRICS), 'synced\n0.00\t♫\n1.00\tWildfire\n2.00\t♫\n3.00\ta b\n')
+        self.write({'plain': ['\ufeffFirst', '\u200e', 'Second']}, track='track2')
+        self.assertEqual(support.read(nowplaying.LYRICS), 'plain\n\tFirst\n\t\n\tSecond\n')
+
+    @unittest.skipUnless(has_cjk_font(), 'no CJK font installed')
+    def test_a_line_with_cjk_lists_its_runs_fonts(self):
+        self.write({'synced': [(1.0, '夜に駆ける feat. ♫'), (2.0, 'Группа крови ♪')]})
+        lines = support.read(nowplaying.LYRICS).splitlines()
+        self.assertEqual(lines[3], '2.00\tГруппа крови ♪')   # all Ubuntu Sans: no runs listed
+        _, text, *runs = lines[2].split('\t')
+        self.assertEqual(text, '夜に駆ける feat. ♫')
+        sizes = [int(r.split(' ', 1)[0]) for r in runs]
+        families = [r.split(' ', 1)[1] for r in runs]
+        self.assertEqual(sum(sizes), len(text.encode()))
+        self.assertNotEqual(families[0], 'Ubuntu Sans')
+        self.assertEqual(families[-1], 'Ubuntu Sans')        # draw.lua draws the ♫ in Noto Music
+
+    def test_lines_fonts_are_only_worked_out_when_the_file_is_written(self):
+        lyrics = {'synced': [(1.0, '夜に駆ける'), (2.0, 'Second')]}
+        self.write(lyrics)
+        with mock.patch.object(nowplaying, 'lyric_line', side_effect=AssertionError) as line:
+            self.write(lyrics)
+        line.assert_not_called()
 
     def test_plain_lyrics_are_untimed_and_static(self):
         version, count, static = self.write({'plain': ['First', '', 'Second']})
