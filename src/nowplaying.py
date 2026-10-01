@@ -206,6 +206,12 @@ def glaring(rgb):
     return sat >= 0.85 and v >= 0.75 and contrast(LIGHT_FG, rgb) > contrast(DARK_FG, rgb)
 
 
+def neutral(sat, v):
+    """Whether a colour of this saturation and value reads as gray, black or white: gray, or
+    too dark for its hue to mean much."""
+    return sat < 0.15 or v < 0.15
+
+
 def cell_colours(pixels, floor, strict=False):
     """Colours really on the cover for a group of its pixels, most typical first: for each of
     the group's RGB cells (8 levels a channel), densest first, the pixel nearest that cell's
@@ -224,7 +230,10 @@ def cell_colours(pixels, floor, strict=False):
 
 def art_colour(path):
     """Spotify-style backdrop: the cover's biggest vivid colour (if it covers at least 5%
-    of the image, else its dominant colour), as a colour one of its pixels has. On a mostly
+    of the image, else its dominant colour), as a colour one of its pixels has. The cover is
+    sampled 144x144 by nearest pixel, never averaged: averaging blends thin lines into their
+    background, a red line on gray into a pink the cover does not have. On a 640px cover
+    that is about every fourth pixel, so no stroke 5px wide or more is missed. On a mostly
     grayscale cover, any small splash of colour beats the gray/black, and a grayish or
     near-black dominant colour loses to the cover's main hue once colour fills 10% of it.
     A bright colour on a mostly dark cover (60% of it under a third of full value), like a
@@ -233,10 +242,13 @@ def art_colour(path):
 
     The colour is used as it is, never shifted. When neither foreground reaches MIN_CONTRAST
     on it, the next colour on the cover is tried: the same group's other shades, then the
-    cover's other colour groups of floor pixels or more, biggest first. A glaring colour
-    gives way to the cover's own black or gray instead (never its white), its most common
-    usable one. A cover with no usable colour gets FALLBACK_BG."""
-    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
+    cover's other colour groups of floor pixels or more, biggest first. A glaring colour is
+    passed over the same way, and once one has been, the cover's grays, black and white wait
+    till every colour has been tried. Only then does it give way to the cover's own black or
+    gray (never its white), its most common usable one. A cover with no usable colour gets
+    FALLBACK_BG."""
+    pb = GdkPixbuf.Pixbuf.new_from_file(path)
+    pb = pb.scale_simple(144, 144, GdkPixbuf.InterpType.NEAREST)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
     buckets, accents, pixels, neutrals = {}, {}, [], []
     for yy in range(pb.get_height()):
@@ -248,7 +260,7 @@ def art_colour(path):
             tot = buckets.setdefault(key, [0, 0.0, 0.0, 0.0, sat >= 0.35 and v >= 0.3, []])
             tot[0] += 1; tot[1] += r; tot[2] += g; tot[3] += b; tot[5].append((r, g, b))
             pixels.append(((r, g, b), h, sat, v))
-            if sat < 0.15 or v < 0.15:           # gray, or too dark for its hue to mean much
+            if neutral(sat, v):
                 neutrals.append((r, g, b))
             elif sat >= 0.25 and v >= 0.2:       # accent candidates, grouped by hue only
                 acc = accents.setdefault(int(h * 12 + 0.5) % 12, [0, 0.0, 0.0, 0.0, False, []])
@@ -258,7 +270,7 @@ def art_colour(path):
     vivid = [t for t in buckets.values() if t[4]]
     dominant = max(buckets.values())
     _, dsat, dv = colorsys.rgb_to_hsv(*(c / dominant[0] for c in dominant[1:4]))
-    floor = 0.004 * total                        # ~9px keeps JPEG noise from winning
+    floor = 0.004 * total                        # ~83px keeps JPEG noise from winning
     if len(neutrals) >= 0.85 * total and accent and accent[0] >= floor:
         best = accent
     elif vivid and max(vivid)[0] >= 0.05 * total:
@@ -279,15 +291,20 @@ def art_colour(path):
                   and ps >= 0.25 and 1 / 3 <= pv < 2 / 3]
         if len(deeper) >= 0.02 * total:
             groups.insert(0, deeper)
+    glared = False
     for group in groups:
         for rgb in cell_colours(group, floor):
             if glaring(rgb):
-                grays = [p for p in neutrals if max(p) < 0.6]   # black and grays, not white
-                return next((c for c in cell_colours(grays, floor, strict=True) if usable(c)),
-                            FALLBACK_BG)
+                glared = True
+                continue
+            if glared and neutral(*colorsys.rgb_to_hsv(*rgb)[1:]):
+                continue                         # past a glaring colour, neutrals wait till last
             if usable(rgb):
                 return rgb
-    return FALLBACK_BG
+    if not glared:
+        return FALLBACK_BG
+    grays = [p for p in neutrals if max(p) < 0.6]   # black and grays, not white
+    return next((c for c in cell_colours(grays, floor, strict=True) if usable(c)), FALLBACK_BG)
 
 
 def update_bg():
