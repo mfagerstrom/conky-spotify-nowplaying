@@ -10,7 +10,7 @@ usage: conky-spotify-nowplaying [command]
   autostart on     start the widget when you log in
   autostart off    don't
 """
-import os, shutil, signal, subprocess, sys, time
+import os, re, shutil, signal, subprocess, sys, time
 
 NAME = 'conky-spotify-nowplaying'
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -28,8 +28,8 @@ HIDDEN = os.path.join(CACHE, 'hidden')          # minimized; conky-mouse.py unma
 AUTOSTART = os.path.expanduser(f'~/.config/autostart/{NAME}.desktop')
 OLD_CONF = os.path.expanduser('~/.config/conky')   # pre-package installs kept state here
 STATE_FILES = ('position', 'spotify-client-id', 'spotify-token.json')
-# conky-mouse.py exits with this when the display scale changes (a monitor added or
-# removed can change XWayland's); these read the scale once at start, so they start again.
+# conky-mouse.py exits with this when Xft.dpi changes (a monitor added or removed can
+# change XWayland's scale); these read it once at start, so they start again.
 RESCALED, SCALED = 75, ('nowplaying', 'conky')
 
 
@@ -98,6 +98,12 @@ def stop():
     return True
 
 
+def xft_dpi():
+    out = subprocess.run(['xrdb', '-query'], capture_output=True, text=True).stdout
+    m = re.search(r'Xft\.dpi:\s*(\d+)', out)
+    return m.group(1) if m else ''
+
+
 def end(proc):
     if proc and proc.poll() is None:
         proc.terminate()
@@ -131,6 +137,7 @@ def supervise():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     last_start = {}
+    started_dpi = ''   # Xft.dpi as nowplaying.py started, which conky-mouse.py watches for a change
     while not stopping:
         for name, cmd in specs:
             proc = children.get(name)
@@ -145,7 +152,9 @@ def supervise():
                     end(children.get(other))
             if time.monotonic() - last_start.get(name, -10) < 2:   # don't spin if it keeps dying
                 continue
-            children[name] = subprocess.Popen(cmd, cwd=APP_DIR)
+            if name == 'nowplaying':
+                started_dpi = xft_dpi()
+            children[name] = subprocess.Popen(cmd, cwd=APP_DIR, env=dict(os.environ, CSN_DPI=started_dpi))
             last_start[name] = time.monotonic()
             if name == 'nowplaying':
                 time.sleep(1)   # let it write the first widget.txt before conky reads it

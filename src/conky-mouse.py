@@ -22,16 +22,18 @@ controls move when titles wrap.
 The position lives in ~/.config/conky-spotify-nowplaying/position, not in conky.conf:
 rewriting conky.conf makes conky reload and flash. Instead this helper keeps the window
 at the saved spot, moving it back whenever conky places it elsewhere (startup, reloads).
-The file holds 'x y monitor dx dy dpi': the root-window x y conky.conf starts the window
-at, and the monitor the window was left on, its offset from that monitor's top left corner
-and the Xft.dpi those were saved at. Adding or removing a monitor moves the others in root
-coordinates, and can change XWayland's scale and with it every coordinate, so the window
-is put back at its offset on its monitor, at the current scale, while that monitor is
-connected, and kept on the nearest one while it is not.
+The file holds 'x y monitor dx dy width scale': the root-window x y conky.conf starts the
+window at, and the monitor the window was left on, its offset from that monitor's top left
+corner, that monitor's width and the display scale, all as they were when saved. Adding or
+removing a monitor moves the others in root coordinates, and can change XWayland's scale
+and with it every coordinate, so the window is put back at its offset on its monitor,
+scaled as that monitor's width has (the width is read with the origin, so the two always
+agree), while that monitor is connected, and kept on the nearest one while it is not.
 
-A change of the display scale also needs nowplaying.py and conky started again, since both
-read it once at start; this helper saves the position at the new scale and exits with
-RESCALED, and the launcher restarts the three of them.
+A change of Xft.dpi (the display scale, or the text scaling it also carries) needs
+nowplaying.py and conky started again, since both read it once at start; this helper
+saves the position and exits with RESCALED, and the launcher restarts the three of them.
+It compares against CSN_DPI, the Xft.dpi the launcher read as it started nowplaying.py.
 
 A resize only writes the size settings, once, on release: nowplaying.py lays the widget out
 again and conky's window takes the new size, without a reload or a restart. Conky's window
@@ -71,8 +73,8 @@ COVER_HOLD = 0.1                                  # s: conky draws every 0.05 s
 OUTLINE, OUTLINE_WIDTH = 0x1db954, 2              # Spotify green; logical px
 EDGE = 6                                          # logical px along the border that resize
 CORNER = 24                                       # how far from a corner both of its edges resize
+RESCALED = 75                                     # exit status: Xft.dpi changed (the launcher's too)
 # X cursor font shapes (X11/cursorfont.h), by the edges a press there resizes.
-RESCALED = 75                                     # exit status: the display scale changed (the launcher)
 CURSORS = {'l': 70, 'r': 96, 't': 138, 'b': 16, 'lt': 134, 'rt': 136, 'lb': 12, 'rb': 14}
 
 x11 = ctypes.CDLL('libX11.so.6')
@@ -244,13 +246,18 @@ def dpi():
     return int(m.group(1)) if m else None
 
 
+def scale_of(at):
+    """The display scale at Xft.dpi `at`, as conky.conf and nowplaying.py work it out."""
+    return round((at or 96) / 96)
+
+
 def scale():
-    return round((dpi() or 96) / 96)
+    return scale_of(dpi())
 
 
 def load_position():
-    """(x, y, anchor), anchor being (monitor, dx, dy, dpi) or None for a file without one,
-    or None when no position is saved."""
+    """(x, y, anchor), anchor being (monitor, dx, dy, width, scale) or None for a file
+    without one, or None when no position is saved."""
     try:
         with open(POSITION) as f:
             fields = f.read().split()
@@ -258,8 +265,8 @@ def load_position():
     except (OSError, ValueError, IndexError):
         return None
     try:
-        anchor = fields[2], int(fields[3]), int(fields[4]), int(fields[5])
-    except (ValueError, IndexError):
+        anchor = (fields[2], *map(int, fields[3:7])) if len(fields) >= 7 else None
+    except ValueError:
         anchor = None
     return x, y, anchor
 
@@ -267,36 +274,39 @@ def load_position():
 def save_position(x, y, anchor):
     os.makedirs(CONF, exist_ok=True)
     with open(POSITION + '.tmp', 'w') as f:            # conky.conf reads it at start
-        f.write(f'{x} {y}' + (' {} {} {} {}'.format(*anchor) if anchor else '') + '\n')
+        f.write(' '.join(map(str, (x, y, *(anchor or ())))) + '\n')
     os.replace(POSITION + '.tmp', POSITION)
 
 
-def anchor_for(x, y, w, h, mons, at):
-    """The anchor for a window at (x, y, w, h): the monitor it is on, its offset there, and
-    the dpi `at`. None when xrandr lists no monitors or the dpi is not known."""
+def anchor_for(x, y, w, h, mons, s):
+    """The anchor for a window at (x, y, w, h) at display scale s: the monitor it is on,
+    its offset there, that monitor's width and s. None when xrandr lists no monitors."""
     mon = nearest_monitor(x, y, w, h, mons)
-    return (mon[5], x - mon[0], y - mon[1], at) if mon and at else None
+    return (mon[5], x - mon[0], y - mon[1], mon[2], s) if mon else None
 
 
-def resolve(saved, mons, at):
-    """The saved position for the monitors `mons` at dpi `at`: (x, y, anchor), x and y at
-    the anchor's offset on its monitor, or where they were saved while that monitor is not
-    connected; both scaled when the dpi has changed. Not yet kept on a monitor."""
+def resolve(saved, mons, s):
+    """The saved position for the monitors `mons` at display scale s: (x, y, anchor). With
+    the anchor's monitor connected, at its offset there, scaled as the monitor's width has;
+    without it, where it was saved, scaled as the display scale has. Not yet kept on a
+    monitor."""
     x, y, anchor = saved
-    if not anchor or not at:
+    if not anchor:
         return saved
-    name, dx, dy, saved_at = anchor
-    if saved_at != at:
-        x, y, dx, dy = (round(v * at / saved_at) for v in (x, y, dx, dy))
+    name, dx, dy, width, saved_s = anchor
     mon = next((m for m in mons if m[5] == name), None)
     if mon:
-        x, y = mon[0] + dx, mon[1] + dy
-    return x, y, (name, dx, dy, at)
+        if mon[2] != width:
+            dx, dy = (round(v * mon[2] / width) for v in (dx, dy))
+        return mon[0] + dx, mon[1] + dy, (name, dx, dy, mon[2], s)
+    if saved_s != s:
+        x, y, dx, dy, width = (round(v * s / saved_s) for v in (x, y, dx, dy, width))
+    return x, y, (name, dx, dy, width, s)
 
 
 def remember(x, y, w, h):
     """Save (x, y) as the position of a w x h window, anchored to the monitor it is on."""
-    save_position(x, y, anchor_for(x, y, w, h, monitors(), dpi()))
+    save_position(x, y, anchor_for(x, y, w, h, monitors(), scale()))
 
 
 def resize_edges(x, y, w, h, s):
@@ -581,7 +591,7 @@ def main():
     above, last_on_top = None, 0.0               # the always-on-top state win has; None: not set
     logged_on_top = None
     s = scale()                                  # refreshed on each click; motion uses the last
-    start_dpi = dpi()
+    start_dpi = int(os.environ.get('CSN_DPI') or 0) or dpi()   # what nowplaying.py started at
     ev = XEvent()
     while True:
         now = time.monotonic()
@@ -591,7 +601,7 @@ def main():
         if now - last_check > 1:
             last_check = now
             mons, at, saved = monitors(), dpi(), load_position()
-            resolved = saved and resolve(saved, mons, at)
+            resolved = saved and resolve(saved, mons, scale_of(at))
             if at and start_dpi and at != start_dpi:
                 if saved:
                     save_position(*resolved)            # what conky.conf starts the window at
@@ -610,7 +620,7 @@ def main():
                 if (x, y) != target:
                     x11.XMoveWindow(d, win, *target)
                 if saved:                              # a file from before anchors gets one here
-                    anchor = resolved[2] or anchor_for(*target, w, h, mons, at)
+                    anchor = resolved[2] or anchor_for(*target, w, h, mons, scale_of(at))
                     if (*target, anchor) != saved:     # x y for conky.conf; the anchor stays
                         save_position(*target, anchor)
                 # Unmapped again every second while hidden, since a conky reload maps it.
