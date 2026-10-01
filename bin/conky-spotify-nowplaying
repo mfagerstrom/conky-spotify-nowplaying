@@ -28,6 +28,9 @@ HIDDEN = os.path.join(CACHE, 'hidden')          # minimized; conky-mouse.py unma
 AUTOSTART = os.path.expanduser(f'~/.config/autostart/{NAME}.desktop')
 OLD_CONF = os.path.expanduser('~/.config/conky')   # pre-package installs kept state here
 STATE_FILES = ('position', 'spotify-client-id', 'spotify-token.json')
+# conky-mouse.py exits with this when the display scale changes (a monitor added or
+# removed can change XWayland's); these read the scale once at start, so they start again.
+RESCALED, SCALED = 75, ('nowplaying', 'conky')
 
 
 def notify(msg):
@@ -95,8 +98,19 @@ def stop():
     return True
 
 
+def end(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
 def supervise():
-    """Runs the contents generator, conky and the mouse helper; restarts any that exit."""
+    """Runs the contents generator, conky and the mouse helper; restarts any that exit, and
+    the ones that read the display scale when it changes."""
     with open(PIDFILE, 'w') as f:
         f.write(str(os.getpid()))
     py = sys.executable
@@ -125,6 +139,10 @@ def supervise():
             if proc and proc.returncode == 78:
                 given_up.add(name)
                 continue
+            if proc and proc.returncode == RESCALED:
+                children[name] = None          # handled once, even if its start waits below
+                for other in SCALED:           # started again on the next pass, in order
+                    end(children.get(other))
             if time.monotonic() - last_start.get(name, -10) < 2:   # don't spin if it keeps dying
                 continue
             children[name] = subprocess.Popen(cmd, cwd=APP_DIR)

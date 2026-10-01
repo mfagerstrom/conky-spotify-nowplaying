@@ -19,9 +19,19 @@ helper subscribes to clicks on conky's window itself:
 Hit areas come from nowplaying.py (regions.json, logical px, window-relative), since the
 controls move when titles wrap.
 
-The position lives in ~/.config/conky-spotify-nowplaying/position (root-window x y), not in conky.conf:
+The position lives in ~/.config/conky-spotify-nowplaying/position, not in conky.conf:
 rewriting conky.conf makes conky reload and flash. Instead this helper keeps the window
 at the saved spot, moving it back whenever conky places it elsewhere (startup, reloads).
+The file holds 'x y monitor dx dy dpi': the root-window x y conky.conf starts the window
+at, and the monitor the window was left on, its offset from that monitor's top left corner
+and the Xft.dpi those were saved at. Adding or removing a monitor moves the others in root
+coordinates, and can change XWayland's scale and with it every coordinate, so the window
+is put back at its offset on its monitor, at the current scale, while that monitor is
+connected, and kept on the nearest one while it is not.
+
+A change of the display scale also needs nowplaying.py and conky started again, since both
+read it once at start; this helper saves the position at the new scale and exits with
+RESCALED, and the launcher restarts the three of them.
 
 A resize only writes the size settings, once, on release: nowplaying.py lays the widget out
 again and conky's window takes the new size, without a reload or a restart. Conky's window
@@ -62,6 +72,7 @@ OUTLINE, OUTLINE_WIDTH = 0x1db954, 2              # Spotify green; logical px
 EDGE = 6                                          # logical px along the border that resize
 CORNER = 24                                       # how far from a corner both of its edges resize
 # X cursor font shapes (X11/cursorfont.h), by the edges a press there resizes.
+RESCALED = 75                                     # exit status: the display scale changed (the launcher)
 CURSORS = {'l': 70, 'r': 96, 't': 138, 'b': 16, 'lt': 134, 'rt': 136, 'lb': 12, 'rb': 14}
 
 x11 = ctypes.CDLL('libX11.so.6')
@@ -170,32 +181,39 @@ def conky_window():
 
 
 def monitors():
-    """[(x, y, w, h, primary)] in root-window coordinates."""
+    """[(x, y, w, h, primary, name)] in root-window coordinates."""
     out = subprocess.run(['xrandr', '--listmonitors'], capture_output=True, text=True).stdout
     mons = []
-    for m in re.finditer(r'^\s*\d+: \+(\*?)\S+ (\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)', out, re.M):
-        mons.append((int(m[4]), int(m[5]), int(m[2]), int(m[3]), m[1] == '*'))
+    for m in re.finditer(r'^\s*\d+: \+(\*?)(\S+) (\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)', out, re.M):
+        mons.append((int(m[5]), int(m[6]), int(m[3]), int(m[4]), m[1] == '*', m[2]))
     return mons
 
 
-def monitor_for(x, y, w, h):
-    """(x, y, w, h) of the monitor containing the window's center (or the nearest one), or
-    None when xrandr lists none."""
-    mons = monitors()
+def nearest_monitor(x, y, w, h, mons=None):
+    """The monitors() entry containing the window's center (or the nearest one), or None
+    when xrandr lists none."""
+    mons = monitors() if mons is None else mons
     if not mons:
         return None
     cx, cy = x + w // 2, y + h // 2
     def dist(m):
-        mx, my, mw, mh, _ = m
+        mx, my, mw, mh = m[:4]
         dx = max(mx - cx, 0, cx - (mx + mw))
         dy = max(my - cy, 0, cy - (my + mh))
         return dx * dx + dy * dy
-    return min(mons, key=dist)[:4]
+    return min(mons, key=dist)
 
 
-def clamp_to_monitor(x, y, w, h):
+def monitor_for(x, y, w, h, mons=None):
+    """(x, y, w, h) of the monitor containing the window's center (or the nearest one), or
+    None when xrandr lists none."""
+    mon = nearest_monitor(x, y, w, h, mons)
+    return mon[:4] if mon else None
+
+
+def clamp_to_monitor(x, y, w, h, mons=None):
     """Keep the window fully on the monitor containing its center (or the nearest one)."""
-    mon = monitor_for(x, y, w, h)
+    mon = monitor_for(x, y, w, h, mons)
     if not mon:
         return x, y
     mx, my, mw, mh = mon
@@ -218,24 +236,67 @@ def pointer(d, root):
     return rx.value, ry.value, mask.value
 
 
-def scale():
+def dpi():
+    """Xft.dpi, 96 times the display scale, or None when xrdb has none. XWayland's scale
+    follows the monitors connected, so adding or removing one can change it."""
     out = subprocess.run(['xrdb', '-query'], capture_output=True, text=True).stdout
     m = re.search(r'Xft\.dpi:\s*(\d+)', out)
-    return round(int(m.group(1)) / 96) if m else 1
+    return int(m.group(1)) if m else None
+
+
+def scale():
+    return round((dpi() or 96) / 96)
 
 
 def load_position():
+    """(x, y, anchor), anchor being (monitor, dx, dy, dpi) or None for a file without one,
+    or None when no position is saved."""
     try:
-        x, y = open(POSITION).read().split()
-        return int(x), int(y)
-    except (OSError, ValueError):
+        with open(POSITION) as f:
+            fields = f.read().split()
+        x, y = int(fields[0]), int(fields[1])
+    except (OSError, ValueError, IndexError):
         return None
+    try:
+        anchor = fields[2], int(fields[3]), int(fields[4]), int(fields[5])
+    except (ValueError, IndexError):
+        anchor = None
+    return x, y, anchor
 
 
-def save_position(x, y):
+def save_position(x, y, anchor):
     os.makedirs(CONF, exist_ok=True)
-    with open(POSITION, 'w') as f:
-        f.write(f'{x} {y}\n')
+    with open(POSITION + '.tmp', 'w') as f:            # conky.conf reads it at start
+        f.write(f'{x} {y}' + (' {} {} {} {}'.format(*anchor) if anchor else '') + '\n')
+    os.replace(POSITION + '.tmp', POSITION)
+
+
+def anchor_for(x, y, w, h, mons, at):
+    """The anchor for a window at (x, y, w, h): the monitor it is on, its offset there, and
+    the dpi `at`. None when xrandr lists no monitors or the dpi is not known."""
+    mon = nearest_monitor(x, y, w, h, mons)
+    return (mon[5], x - mon[0], y - mon[1], at) if mon and at else None
+
+
+def resolve(saved, mons, at):
+    """The saved position for the monitors `mons` at dpi `at`: (x, y, anchor), x and y at
+    the anchor's offset on its monitor, or where they were saved while that monitor is not
+    connected; both scaled when the dpi has changed. Not yet kept on a monitor."""
+    x, y, anchor = saved
+    if not anchor or not at:
+        return saved
+    name, dx, dy, saved_at = anchor
+    if saved_at != at:
+        x, y, dx, dy = (round(v * at / saved_at) for v in (x, y, dx, dy))
+    mon = next((m for m in mons if m[5] == name), None)
+    if mon:
+        x, y = mon[0] + dx, mon[1] + dy
+    return x, y, (name, dx, dy, at)
+
+
+def remember(x, y, w, h):
+    """Save (x, y) as the position of a w x h window, anchored to the monitor it is on."""
+    save_position(x, y, anchor_for(x, y, w, h, monitors(), dpi()))
 
 
 def resize_edges(x, y, w, h, s):
@@ -343,7 +404,7 @@ def near(a, b):
 def resize(d, root, win, edges, s, regions):
     """Outline the new size while the pointer drags `edges`; on release, save it and hold a
     copy of the widget over conky's window while it takes the new size. Returns the window's
-    new position, or None if nothing changed."""
+    new position and size, or None if nothing changed."""
     old = new = widget_size.load()
     start = wx, wy, w, h = geometry(d, win)
     mon = monitor_for(wx, wy, w, h)
@@ -391,7 +452,7 @@ def resize(d, root, win, edges, s, regions):
         uncover(d, shade)
     x, y = clamp_to_monitor(*g)
     log(f'resize end: {new}, window {g[2]}x{g[3]} -> saved {x},{y}')
-    return x, y
+    return x, y, *g[2:]
 
 
 def drag(d, root, win):
@@ -410,7 +471,7 @@ def drag(d, root, win):
     x, y, _, _ = geometry(d, win)
     cx, cy = clamp_to_monitor(x, y, w, h)
     log(f'drag end: window {x},{y} -> saved {cx},{cy}')
-    return cx, cy
+    return cx, cy, w, h
 
 
 def load_on_top():
@@ -520,6 +581,7 @@ def main():
     above, last_on_top = None, 0.0               # the always-on-top state win has; None: not set
     logged_on_top = None
     s = scale()                                  # refreshed on each click; motion uses the last
+    start_dpi = dpi()
     ev = XEvent()
     while True:
         now = time.monotonic()
@@ -528,6 +590,13 @@ def main():
         # re-apply every second.
         if now - last_check > 1:
             last_check = now
+            mons, at, saved = monitors(), dpi(), load_position()
+            resolved = saved and resolve(saved, mons, at)
+            if at and start_dpi and at != start_dpi:
+                if saved:
+                    save_position(*resolved)            # what conky.conf starts the window at
+                log(f'display scale changed: {start_dpi} -> {at} dpi, restarting')
+                sys.exit(RESCALED)
             current = conky_window()
             if current:
                 if current != win:
@@ -536,11 +605,14 @@ def main():
                 win = current
                 above = None                           # sent again below; a no-op if it held
                 x11.XSelectInput(d, win, BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK)
-                saved = load_position()
                 x, y, w, h = geometry(d, win)
-                target = clamp_to_monitor(*saved, w, h) if saved else (x, y)
+                target = clamp_to_monitor(*resolved[:2], w, h, mons) if saved else (x, y)
                 if (x, y) != target:
                     x11.XMoveWindow(d, win, *target)
+                if saved:                              # a file from before anchors gets one here
+                    anchor = resolved[2] or anchor_for(*target, w, h, mons, at)
+                    if (*target, anchor) != saved:     # x y for conky.conf; the anchor stays
+                        save_position(*target, anchor)
                 # Unmapped again every second while hidden, since a conky reload maps it.
                 hide = os.path.exists(HIDDEN)
                 if hide:
@@ -616,9 +688,9 @@ def main():
                 elif edges:
                     placed = resize(d, root, win, edges, s, regions)
                     if placed:
-                        save_position(*placed)
+                        remember(*placed)
                 else:
-                    save_position(*drag(d, root, win))
+                    remember(*drag(d, root, win))
         time.sleep(0.02)
 
 
