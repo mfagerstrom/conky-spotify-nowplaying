@@ -1,3 +1,18 @@
+conky-spotify-nowplaying (1.7.0) resolute; urgency=medium
+
+  * Titles, artists and lyrics in Japanese, Chinese and Korean are drawn
+    in a font that has them (Noto Sans CJK, now recommended) instead of
+    as boxes.
+  * Invisible characters Spotify sometimes puts in a title, like the
+    word joiner before "Wildfire" by Wasia Project, are no longer drawn
+    as a box.
+  * When the album art's main colour is too glaring for white text, the
+    background tries the cover's next colour before falling back to
+    black or gray, and small details on large covers keep their own
+    colour.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Thu, 01 Oct 2026 12:11:25 -0400
+
 conky-spotify-nowplaying (1.6.0) resolute; urgency=medium
 
   * The widget's rounded card now has a soft drop shadow, so it stands
