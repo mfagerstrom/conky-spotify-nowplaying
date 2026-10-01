@@ -15,8 +15,9 @@ A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Co
   controls turn dark on a light background. On a mostly dark cover, a bright colour such as
   a band of light gives way to a deeper shade of it that the cover also has. When neither
   white nor dark text would be easy to read on the cover's main colour, the next colour on
-  the cover is used instead, never a lightened or darkened one; a cover with no such colour
-  gets Spotify's dark gray (#181818)
+  the cover is used instead, never a lightened or darkened one. A vivid, bright colour that
+  would carry white text, like a saturated red or orange, gives way to a black or gray from
+  the cover. A cover with no such colour gets Spotify's dark gray (#181818)
 - Drag the widget anywhere, on any monitor; its position is remembered. Plugging in or
   unplugging a monitor keeps it where it was on its own monitor, at the same size, or moves
   it onto the nearest one while its own is unplugged

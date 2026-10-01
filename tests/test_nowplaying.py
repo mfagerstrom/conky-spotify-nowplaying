@@ -69,7 +69,7 @@ class ArtColourTest(support.TempDirTest):
 
     def test_small_vivid_patch_beats_a_dull_dominant_colour(self):
         # A dull brown cover (not grayscale) with a vivid orange block over 5% of it.
-        orange = (240, 130, 20)
+        orange = (180, 80, 10)
         path = self.cover(lambda x, y: orange if x < 12 and y < 12 else (90, 75, 60))
         self.assertHue(path, orange)
 
@@ -95,19 +95,19 @@ class ArtColourTest(support.TempDirTest):
 
     def test_the_colour_is_a_pixel_on_the_cover(self):
         # A hue slice spread from dark to bright: its mean would be a colour no pixel has.
-        shades = [(240, 90, 10), (120, 40, 5), (250, 110, 30), (235, 85, 12)]
+        shades = [(180, 70, 8), (120, 40, 5), (190, 85, 25), (175, 65, 10)]
         path = self.cover(lambda x, y: shades[(x + y) % 4] if x < 30 else (10, 10, 10))
         pixel = tuple(round(c * 255) for c in nowplaying.art_colour(path))
         self.assertIn(pixel, shades)
 
-    def test_a_vivid_orange_is_used_as_it_is_with_white_text(self):
-        # The Somebody Better cover's orange-red: white text reaches Lc 60 on it.
-        # (WCAG 2's ratio would pick dark text here, which reads poorly on it.)
-        orange = (0xe2, 0x47, 0x07)
-        rgb = nowplaying.art_colour(self.cover(lambda x, y: orange))
-        self.assertEqual(tuple(round(c * 255) for c in rgb), orange)
-        self.assertGreater(nowplaying.contrast(nowplaying.LIGHT_FG, rgb),
-                           nowplaying.contrast(nowplaying.DARK_FG, rgb))
+    def test_a_vivid_orange_under_white_text_is_glaring(self):
+        # The Somebody Better cover's orange-red: white reaches Lc 60 on it and contrasts more
+        # than dark text, yet it is hard on the eyes, so it is not used as the backdrop.
+        orange = (0xe2 / 255, 0x47 / 255, 0x07 / 255)
+        self.assertTrue(nowplaying.usable(orange))
+        self.assertGreater(nowplaying.contrast(nowplaying.LIGHT_FG, orange),
+                           nowplaying.contrast(nowplaying.DARK_FG, orange))
+        self.assertTrue(nowplaying.glaring(orange))
 
     def test_a_light_colour_gets_dark_text(self):
         yellow = (250 / 255, 225 / 255, 60 / 255)
@@ -152,10 +152,44 @@ class ArtColourTest(support.TempDirTest):
         rows = [gray] * 20 + [bright] * 20 + [deep] * 8
         self.assertEqual(self.picked(self.cover(lambda x, y: rows[y])), bright)
 
+    def test_a_light_gray_pick_on_a_mostly_neutral_cover_takes_no_deeper_shade(self):
+        # White and a pale beige, with a little dull red: white is neutral but not dark,
+        # and a gray has no hue for a deeper shade to share.
+        white, beige, dull = (250, 250, 250), (230, 210, 184), (128, 96, 90)
+        rows = [white] * 34 + [beige] * 12 + [dull] * 2
+        self.assertEqual(self.picked(self.cover(lambda x, y: rows[y])), white)
+
     def test_a_deeper_shade_too_scarce_to_count_is_passed_over(self):
         black, bright, deep = (12, 12, 11), (204, 34, 35), (145, 29, 29)
         path = self.cover(lambda x, y: deep if y == 47 and x < 20 else bright if y >= 38 else black)
         self.assertEqual(self.picked(path), bright)
+
+    def test_a_glaring_red_gives_way_to_a_gray_on_the_cover(self):
+        # Fistful Of Money: a saturated red under white text, with dark gray figures on it.
+        red, gray, white = (211, 5, 1), (78, 77, 76), (250, 250, 250)
+        self.assertTrue(nowplaying.glaring([c / 255 for c in red]))
+        rows = [red] * 30 + [gray] * 10 + [white] * 8
+        self.assertEqual(self.picked(self.cover(lambda x, y: rows[y])), gray)
+
+    def test_a_glaring_orange_with_only_white_beside_it_gets_the_fallback(self):
+        orange, white = (0xe4, 0x4a, 0x02), (250, 250, 250)
+        path = self.cover(lambda x, y: orange if y < 36 else white)
+        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+
+    def test_a_glaring_colour_never_gives_way_to_a_stray_gray_pixel(self):
+        # Bloodlines: orange and pale cyan lettering, with a gray only in a pixel or two.
+        orange, cyan, gray = (252, 74, 11), (190, 240, 245), (150, 138, 131)
+        path = self.cover(lambda x, y: gray if x < 2 and y == 0 else cyan if y >= 36 else orange)
+        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+
+    def test_a_vivid_colour_under_dark_text_is_not_glaring(self):
+        for rgb in ((0x09, 0xc9, 0xfe), (0xff, 0xd8, 0x3f), (0x2a, 0xfa, 0xa8)):
+            with self.subTest(rgb):
+                self.assertFalse(nowplaying.glaring([c / 255 for c in rgb]))
+                self.assertEqual(self.picked(self.cover(lambda x, y: rgb)), rgb)
+
+    def test_a_deep_red_under_white_text_is_not_glaring(self):
+        self.assertFalse(nowplaying.glaring([0x91 / 255, 0x1d / 255, 0x1d / 255]))
 
     def test_a_cover_with_no_usable_colour_gets_the_fallback(self):
         green, glow = (0x1e, 0xb9, 0x54), (250, 120, 110)
