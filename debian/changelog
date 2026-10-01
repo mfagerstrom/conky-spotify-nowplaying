@@ -1,3 +1,16 @@
+conky-spotify-nowplaying (1.6.0) resolute; urgency=medium
+
+  * The widget's rounded card now has a soft drop shadow, so it stands
+    out from the wallpaper. Clicks on the shadow go through to whatever
+    is underneath, and saved positions keep the card where it was.
+  * Plain lyrics (and synced lyrics set to Static) show a slim scrollbar
+    on the right when they run longer than the lyrics area.
+  * The mouse pointer no longer shrinks when it moves over the widget on
+    a scaled display (XWayland native scaling).
+  * New dependency: libxext6.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Thu, 01 Oct 2026 11:08:10 -0400
+
 conky-spotify-nowplaying (1.5.1) resolute; urgency=medium
 
   * Plugging in or unplugging a monitor keeps the widget where it was on
