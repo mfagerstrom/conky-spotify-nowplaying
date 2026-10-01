@@ -233,9 +233,11 @@ def art_colour(path):
 
     The colour is used as it is, never shifted. When neither foreground reaches MIN_CONTRAST
     on it, the next colour on the cover is tried: the same group's other shades, then the
-    cover's other colour groups of floor pixels or more, biggest first. A glaring colour
-    gives way to the cover's own black or gray instead (never its white), its most common
-    usable one. A cover with no usable colour gets FALLBACK_BG."""
+    cover's other colour groups of floor pixels or more, biggest first. A glaring colour is
+    passed over the same way, and once one has been, the cover's grays, black and white wait
+    till every colour has been tried. Only then does it give way to the cover's own black or
+    gray (never its white), its most common usable one. A cover with no usable colour gets
+    FALLBACK_BG."""
     pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
     buckets, accents, pixels, neutrals = {}, {}, [], []
@@ -279,15 +281,21 @@ def art_colour(path):
                   and ps >= 0.25 and 1 / 3 <= pv < 2 / 3]
         if len(deeper) >= 0.02 * total:
             groups.insert(0, deeper)
+    glared = False
     for group in groups:
         for rgb in cell_colours(group, floor):
             if glaring(rgb):
-                grays = [p for p in neutrals if max(p) < 0.6]   # black and grays, not white
-                return next((c for c in cell_colours(grays, floor, strict=True) if usable(c)),
-                            FALLBACK_BG)
+                glared = True
+                continue
+            _, csat, cv = colorsys.rgb_to_hsv(*rgb)
+            if glared and (csat < 0.15 or cv < 0.15):
+                continue                         # past a glaring colour, neutrals wait till last
             if usable(rgb):
                 return rgb
-    return FALLBACK_BG
+    if not glared:
+        return FALLBACK_BG
+    grays = [p for p in neutrals if max(p) < 0.6]   # black and grays, not white
+    return next((c for c in cell_colours(grays, floor, strict=True) if usable(c)), FALLBACK_BG)
 
 
 def update_bg():

@@ -177,10 +177,28 @@ class ArtColourTest(support.TempDirTest):
         self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
 
     def test_a_glaring_colour_never_gives_way_to_a_stray_gray_pixel(self):
+        orange, white, gray = (252, 74, 11), (250, 250, 250), (150, 138, 131)
+        path = self.cover(lambda x, y: gray if x < 2 and y == 0 else white if y >= 36 else orange)
+        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+
+    def test_a_glaring_colour_gives_way_to_the_next_colour_on_the_cover(self):
         # Bloodlines: orange and pale cyan lettering, with a gray only in a pixel or two.
         orange, cyan, gray = (252, 74, 11), (190, 240, 245), (150, 138, 131)
         path = self.cover(lambda x, y: gray if x < 2 and y == 0 else cyan if y >= 36 else orange)
-        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+        self.assertEqual(self.picked(path), cyan)
+
+    def test_a_glaring_colour_passes_over_bigger_grays_for_a_smaller_colour(self):
+        # Two Sides: a bright red car on gray pavement, with tulips and their green leaves.
+        red, pavement, leaf, tulip = (230, 20, 15), (120, 120, 118), (40, 110, 45), (245, 200, 30)
+        self.assertTrue(nowplaying.glaring([c / 255 for c in red]))
+        rows = [red] * 24 + [pavement] * 14 + [leaf] * 6 + [tulip] * 4
+        path = self.cover(lambda x, y: rows[y])
+        rgb = nowplaying.art_colour(path)
+        _, sat, _ = colorsys.rgb_to_hsv(*rgb)
+        self.assertGreaterEqual(sat, 0.15)
+        self.assertTrue(nowplaying.usable(rgb))
+        self.assertFalse(nowplaying.glaring(rgb))
+        self.assertIn(self.picked(path), (leaf, tulip))
 
     def test_a_vivid_colour_under_dark_text_is_not_glaring(self):
         for rgb in ((0x09, 0xc9, 0xfe), (0xff, 0xd8, 0x3f), (0x2a, 0xfa, 0xa8)):
