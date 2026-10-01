@@ -16,6 +16,7 @@ pcall(require, 'cairo_xlib')
 local cache = os.getenv('HOME') .. '/.cache/conky-spotify-nowplaying/'
 local hover_x, hover_y = -1, -1          -- window px
 local margin = 0                          -- the shadow margin around the card, in window px
+local frame = nil                         -- draw.txt as the background hook read it this frame
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
 -- Foreground: white on dark or saturated backgrounds, near-black on light ones, whichever
 -- contrasts more with the background as it fades (nowplaying.py's LIGHT_FG and DARK_FG).
@@ -185,10 +186,13 @@ function conky_draw_background()
     -- the card, inset by the shadow margin draw.txt gives, and its shadow in that margin
     if conky_window == nil then return end
     local d = load_draw()
+    frame = d
     local s = d.scale and d.scale[1] or 1
     margin = (d.shadow and d.shadow[1] or 0) * s
     local w, h = conky_window.width - 2 * margin, conky_window.height - 2 * margin
-    if w <= 0 or h <= 0 then return end
+    if w <= 0 or h <= 0 then                       -- a window without the margin: nowplaying.py's
+        margin, w, h = 0, conky_window.width, conky_window.height   -- last-resort error line
+    end
     local rad = math.min(24, h / 4)
     with_cairo(function(cr)
         if margin > 0 then draw_shadow(cr, margin, margin, w, h, rad, s) end
@@ -489,7 +493,8 @@ end
 
 function conky_draw_bar()
     if conky_window == nil then return end
-    local d = load_draw()
+    local d = frame or load_draw()                 -- read once a frame, by the background hook
+    frame = nil
     if not d.scale then return end
     local s, text, times_text = d.scale[1], d.scale[2] or 1, d.scale[3] or 1   -- times_text: the header's too
 
@@ -502,7 +507,7 @@ function conky_draw_bar()
     end
 
     with_cairo(function(cr)
-        if d.shadow then cairo_translate(cr, d.shadow[1] * s, d.shadow[1] * s) end   -- onto the card
+        cairo_translate(cr, margin, margin)        -- onto the card
         if d.window then draw_window_buttons(cr, d.window, s) end
         if d.heart then draw_heart(cr, d.heart, s) end
         if d.label then draw_label(cr, d.label, s, times_text) end
