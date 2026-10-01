@@ -4,7 +4,8 @@
 Four times a second this writes ~/.cache/conky-spotify-nowplaying/widget.txt as conky markup,
 which conky.conf renders through draw.lua's ${lua_parse widget}. It covers:
   - title/artist, wrapped to the widget's fixed column width (measured with Pango,
-    using the same fonts conky draws with)
+    using the same fonts conky draws with, including the fallback fonts Pango picks for
+    scripts Ubuntu Sans lacks, like CJK)
   - album art, downloaded once per track
   - the controls row: draw.lua draws the buttons and seek bar from draw.txt; click
     regions for conky-mouse.py go to regions.json
@@ -18,7 +19,7 @@ which conky.conf renders through draw.lua's ${lua_parse widget}. It covers:
     menu's settings (lyrics_settings.py) turn lyrics off, which collapses their area and
     looks nothing up, or show synced ones statically too.
 """
-import fcntl, functools, hashlib, json, math, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
+import fcntl, functools, hashlib, json, math, os, re, subprocess, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
 import gi
 gi.require_version('Pango', '1.0'); gi.require_version('PangoCairo', '1.0'); gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import GdkPixbuf, Pango, PangoCairo
@@ -68,6 +69,7 @@ BAR_DROP = 2                                  # seek bar sits this much below th
 TITLE_FONT, ARTIST_FONT, LYRIC_FONT = 'Ubuntu Sans Bold 17', 'Ubuntu Sans 13', 'Ubuntu Sans 11'
 LABEL_FONT, HEART_FONT = 'Ubuntu Sans Bold 10', 'DejaVu Sans 15'
 MESSAGE_FONT = 'Ubuntu Sans 11'               # "Spotify not playing" and the like
+NOTES = '[♪♫♬]'                               # draw.lua draws these in Noto Music
 PLAIN_FONT = 'Ubuntu Sans 13'                 # between runs of text; see plain()
 CONTROL_ROW_FONT = 'DejaVu Sans 15'            # only sets the controls row's height
 # The fonts the text scale applies to; the heart and control fonts only size icons' rows.
@@ -114,6 +116,42 @@ def font_description(font):
     return Pango.FontDescription.from_string(sized(font))
 
 
+def display_text(text):
+    """text as the widget shows it: format characters (Unicode category Cf: the word joiner,
+    zero-width spaces and joiners, BOM, direction marks) dropped, which conky and Cairo draw
+    as boxes, and control characters, tabs included, as spaces. Only for what is drawn;
+    LRCLIB lookups and the lyrics cache get what Spotify sent."""
+    return ''.join(' ' if unicodedata.category(c) == 'Cc' else c
+                   for c in text if unicodedata.category(c) != 'Cf')
+
+
+def font_runs(text, font):
+    """text as [(family, part)], cut where Pango's font fallback changes font: 'Ubuntu Sans'
+    for what it has (Latin, Cyrillic, Greek), else the font Pango falls back to, like
+    'Noto Sans CJK JP' for kana, Han and Hangul. Conky and Cairo draw one font a run and
+    have no fallback of their own, so they are given these fonts to draw in."""
+    layout = Pango.Layout.new(_pango)
+    layout.set_font_description(font_description(font))
+    layout.set_text(text, -1)
+    base, raw, items = font_description(font).get_family(), text.encode(), []
+    it = layout.get_iter()
+    while True:
+        run = it.get_run_readonly()
+        if run:
+            item, face = run.item, run.item.analysis.font
+            items.append((item.offset, face.describe().get_family() if face else base,
+                          raw[item.offset:item.offset + item.length].decode()))
+        if not it.next_run():
+            break
+    runs = []
+    for _, family, part in sorted(items):        # logical order, whatever the visual one
+        if runs and runs[-1][0] == family:
+            runs[-1] = (family, runs[-1][1] + part)
+        else:
+            runs.append((family, part))
+    return runs
+
+
 def wrap(text, font, width=None, max_lines=3):
     if width is None:
         width = widget_width - COLUMN_X - 4        # the text column
@@ -136,12 +174,18 @@ def esc(text):
     return text.replace('$', '$$').replace('#', '\\#')
 
 
-def conky_font(pango_font):
-    """'Ubuntu Sans Bold 17' -> 'Ubuntu Sans:bold:size=17', at the text scale"""
+def conky_font(pango_font, family=None):
+    """'Ubuntu Sans Bold 17' -> 'Ubuntu Sans:bold:size=17', at the text scale; with a
+    family, that family in its place: 'Noto Sans CJK JP:bold:size=17'."""
     *name, size = sized(pango_font).split()
     bold = 'Bold' in name
-    name = ' '.join(n for n in name if n != 'Bold')
+    name = family or ' '.join(n for n in name if n != 'Bold')
     return f"{name}{':bold' if bold else ''}:size={size}"
+
+
+def conky_text(text, font):
+    """text as conky markup in font, each run in the font Pango draws it in (font_runs)."""
+    return ''.join(f"${{font {conky_font(font, family)}}}{esc(part)}" for family, part in font_runs(text, font))
 
 
 def playerctl(*args):
@@ -583,13 +627,25 @@ def ink_extents(text, font):
     return ink.y, ink.height
 
 
+def _height(description):
+    m = _pango.get_metrics(description, None)
+    return (m.get_ascent() + m.get_descent()) / Pango.SCALE
+
+
 def line_height(*fonts):
     """Conky's height for a line: the tallest font's ascent + descent."""
+    return max(_height(font_description(font)) for font in fonts)
+
+
+def text_height(text, font):
+    """Conky's height for a line of conky_text(text, font): its tallest run font's. Noto
+    Sans CJK stands taller than Ubuntu Sans at the same size."""
     heights = []
-    for font in fonts:
-        m = _pango.get_metrics(font_description(font), None)
-        heights.append((m.get_ascent() + m.get_descent()) / Pango.SCALE)
-    return max(heights)
+    for family, _ in font_runs(text, font):
+        description = font_description(font)
+        description.set_family(family)
+        heights.append(_height(description))
+    return max(heights, default=line_height(font))
 
 
 def write_regions(regions):
@@ -794,12 +850,12 @@ def render():
     play_cx = prev_cx + SKIP_SIZE / 2 + CONTROL_GAP + PLAY_SIZE / 2
     next_cx = play_cx + PLAY_SIZE / 2 + CONTROL_GAP + SKIP_SIZE / 2
     time_x = next_cx + SKIP_SIZE / 2 + CONTROL_GAP + 4
-    for line in wrap(title, TITLE_FONT):
-        out.append(f"{g}${{lua_parse fg title}}${{font {conky_font(TITLE_FONT)}}}{esc(line)}{plain()}")
-        y += line_height(TITLE_FONT)
-    for line in wrap(artist, ARTIST_FONT, max_lines=2):
-        out.append(f"{g}${{lua_parse fg text}}${{font {conky_font(ARTIST_FONT)}}}{esc(line)}{plain()}")
-        y += line_height(ARTIST_FONT)
+    for line in wrap(display_text(title), TITLE_FONT):
+        out.append(f"{g}${{lua_parse fg title}}{conky_text(line, TITLE_FONT)}{plain()}")
+        y += text_height(line, TITLE_FONT)
+    for line in wrap(display_text(artist), ARTIST_FONT, max_lines=2):
+        out.append(f"{g}${{lua_parse fg text}}{conky_text(line, ARTIST_FONT)}{plain()}")
+        y += text_height(line, ARTIST_FONT)
     # The play button's bottom meets the artwork's bottom, unless a title or artist wrapped
     # onto more lines than fit beside it: then the row, and the widget with it, moves down.
     # A line each of title and artist always fits (see header_scale_for), so the text scale
@@ -870,19 +926,21 @@ def write_lyrics(track_id, shown=True, static=False):
     playback. None when there are no lyrics to show, or `shown` is off.
 
     Synced lyrics go under a 'synced' header as '<seconds>\\t<line>'. Plain ones, and
-    synced ones when `static`, go under 'plain' as '\\t<line>'. Writing new lyrics, or
-    the same ones shown another way, puts a static block back at its top."""
+    synced ones when `static`, go under 'plain' as '\\t<line>'. A line with text Ubuntu Sans
+    lacks has its runs after it (lyric_line). Writing new lyrics, or the same ones shown
+    another way, puts a static block back at its top."""
     lyrics = (state.lyrics or {}) if shown else {}
-    synced = list(lyrics.get('synced') or [])
+    synced = [(t, display_text(l).strip()) for t, l in lyrics.get('synced') or []]
     if synced and not static:
         lines = synced
         if lines[0][0] > 0:
             lines.insert(0, (0.0, ''))           # before the first line: show the intro as ♫
-        mode, body = 'synced', '\n'.join(f'{t:.2f}\t{l or "♫"}' for t, l in lines)   # instrumental: ♫
+        mode, body = 'synced', '\n'.join(f'{t:.2f}\t{lyric_line(l or "♫")}' for t, l in lines)   # instrumental: ♫
     else:
         # untimed, the blank lines of instrumental breaks read as the gaps between verses
-        lines = plain_lines('\n'.join(l for _, l in synced)) if synced else lyrics.get('plain') or []
-        mode, body = 'static' if synced else 'plain', '\n'.join(f'\t{l}' for l in lines)
+        lines = plain_lines('\n'.join([l for _, l in synced] if synced
+                                      else [display_text(l) for l in lyrics.get('plain') or []]))
+        mode, body = 'static' if synced else 'plain', '\n'.join(f'\t{lyric_line(l)}' for l in lines)
     if not lines:
         state.lyrics_written = None              # the same lyrics coming back start at the top
         return None
@@ -895,6 +953,24 @@ def write_lyrics(track_id, shown=True, static=False):
             pass
         state.lyrics_written = version
     return version, len(lines), mode != 'synced'
+
+
+def lyric_line(text):
+    """A line of lyrics.txt after its time: the text, then, when some of it is in a font
+    other than LYRIC_FONT's, a tab-separated '<bytes> <family>' for each run (font_runs), for
+    draw.lua to draw each in its font. Music notes count as LYRIC_FONT's: draw.lua draws
+    them in Noto Music itself."""
+    base = font_description(LYRIC_FONT).get_family()
+    runs = []
+    for part in re.split(f'({NOTES}+)', text):
+        for family, run in [(base, part)] if re.fullmatch(f'{NOTES}*', part) else font_runs(part, LYRIC_FONT):
+            if runs and runs[-1][0] == family:
+                runs[-1] = (family, runs[-1][1] + run)
+            else:
+                runs.append((family, run))
+    if all(family == base for family, _ in runs):
+        return text
+    return '\t'.join([text, *(f'{len(run.encode())} {family}' for family, run in runs)])
 
 
 def library_loop():

@@ -3,6 +3,10 @@
 A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Conky.
 
 - Album art, title and artist, with long titles wrapped to the widget's width
+- Titles, artists and lyrics in other scripts, Cyrillic, Japanese, Chinese and Korean among
+  them, drawn in a font that has them (Noto Sans CJK, which the package recommends, for CJK).
+  Invisible characters Spotify sometimes puts in a title, like a word joiner, are left out
+  rather than drawn as a box
 - Spotify-style controls: previous / play-pause / next, and a seek bar you can click or drag
 - Like button (♥) showing whether the track is in your Liked Songs, click to toggle
 - Minimize (–) and close (×) buttons next to the heart
