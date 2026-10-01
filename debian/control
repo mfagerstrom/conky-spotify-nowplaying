@@ -12,7 +12,7 @@ Rules-Requires-Root: no
 Package: conky-spotify-nowplaying
 Architecture: all
 Depends: ${misc:Depends}, conky-all, playerctl, python3, python3-gi, gir1.2-pango-1.0,
- gir1.2-gdkpixbuf-2.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, libx11-6,
+ gir1.2-gdkpixbuf-2.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, libx11-6, libxext6,
  x11-utils, x11-xserver-utils, xdg-utils, libnotify-bin, libsnappy1v5, fonts-ubuntu,
  fonts-dejavu-core, fonts-noto-core
 Description: Spotify now-playing desktop widget (Conky)

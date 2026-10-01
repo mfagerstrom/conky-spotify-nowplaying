@@ -49,6 +49,10 @@ NO_LYRICS_TTL = 7 * 24 * 3600                    # LRCLIB gains lyrics, so "none
 # Layout, in conky's logical pixels. conky.conf sets no size or margin: the window is as big
 # as this markup, which carries the margins and, through a goto, the width. The user's size
 # settings (widget_size.py) set the width, the lyrics' height and the text's size.
+# Everything below is measured from the card's top left: the window has SHADOW more on every
+# side for draw.lua's shadow, which only the markup adds (goto, image, the first and last gap),
+# while draw.txt and regions.json stay the card's.
+SHADOW = size_file.SHADOW
 MARGIN = 20                                   # around the contents
 MIN_HEIGHT = 108                              # the contents' height at least: the artwork's, less BOTTOM_TRIM
 COLUMN_X = 154                                # text column, right of the 118 px album art
@@ -645,19 +649,21 @@ def gap(space, end='', after_text=True):
 def first_line(next_top, before=''):
     """The widget's top line: it makes conky's window the widget's width (a goto only counts
     on a line with another after it) and starts the next line at next_top."""
-    return before + gap(next_top, f"${{goto {2 * MARGIN + widget_width}}}", after_text=False)
+    return before + gap(SHADOW + next_top, f"${{goto {2 * (SHADOW + MARGIN) + widget_width}}}",
+                        after_text=False)
 
 
 def last_gap(y, bottom):
-    """The last line, ending the window at the widget's bottom."""
-    return gap(bottom - y, after_text=False)
+    """The last line, ending the window at the shadow margin below the widget's bottom."""
+    return gap(bottom + SHADOW - y, after_text=False)
 
 
 def draw_basics():
     """draw.txt's lines for every screen: the scales (display; lyrics' text; the header's
-    and times' text) and the window buttons."""
+    and times' text), the shadow margin and the window buttons."""
     _, min_cx, close_cx, top_cy, _ = top_buttons(widget_width, header_scale)
     return [f'scale {SCALE} {text_scale:g} {header_scale:g}',
+            f'shadow {SHADOW}',
             f'window {min_cx} {close_cx} {top_cy} {WINDOW_BUTTON_SIZE}']
 
 
@@ -667,7 +673,7 @@ def message(text):
     drawn over it."""
     write_atomic(DRAW, '\n'.join(draw_basics()) + '\n')
     return '\n'.join((first_line(MARGIN),
-                      f"${{goto {MARGIN}}}${{lua_parse fg text}}${{font {conky_font(MESSAGE_FONT)}}}{esc(text)}{plain()}",
+                      f"${{goto {SHADOW + MARGIN}}}${{lua_parse fg text}}${{font {conky_font(MESSAGE_FONT)}}}{esc(text)}{plain()}",
                       last_gap(MARGIN + line_height(MESSAGE_FONT, PLAIN_FONT), 2 * MARGIN + MIN_HEIGHT)))
 
 
@@ -759,10 +765,10 @@ def render():
     total = fmt_time(duration)                # measured for the bar; draw.lua draws both times
     mid_offset = controls_mid(total)
     row = line_height(CONTROL_ROW_FONT)
-    g = f'${{goto {COLUMN_X}}}'
+    g = f'${{goto {SHADOW + COLUMN_X}}}'
     # Running top of the current line, to place what draw.lua draws.
     y = TOP_ROW
-    out = [first_line(y, f"${{image {COVER} -p {MARGIN},{MARGIN} -s 118x118 -n}}"),
+    out = [first_line(y, f"${{image {COVER} -p {SHADOW + MARGIN},{SHADOW + MARGIN} -s 118x118 -n}}"),
            # Only reserved: draw.lua draws NOW PLAYING, its capitals level with the artwork's top.
            f"{g}${{font {conky_font(LABEL_FONT)}}} ${{font {conky_font(HEART_FONT)}}} {plain()}"]
     y += line_height(LABEL_FONT, HEART_FONT, PLAIN_FONT)   # plain() ends it, and counts once text grows

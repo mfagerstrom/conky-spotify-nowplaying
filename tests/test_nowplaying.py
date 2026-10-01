@@ -527,10 +527,20 @@ class SizeSettingsTest(support.TempDirTest):
             return text, draw, json.load(f)
 
     def test_the_width_goto_follows_the_width_setting_only(self):
-        for settings, want in (((505, 63, 1.0), 545), ((620, 63, 1.0), 660), ((620, 200, 1.7), 660)):
+        # the width and the margins, and the shadow's margin on both sides
+        for settings, want in (((505, 63, 1.0), 577), ((620, 63, 1.0), 692), ((620, 200, 1.7), 692)):
             with self.subTest(settings=settings):
                 text, _, _ = self.render(settings)
                 self.assertIn(f'${{goto {want}}}', text.splitlines()[0])
+
+    def test_only_the_markup_moves_into_the_shadow_margin(self):
+        text, draw, regions = self.render((505, 63, 1.0))
+        shadow, margin, column = nowplaying.SHADOW, nowplaying.MARGIN, nowplaying.COLUMN_X
+        self.assertEqual(draw['shadow'], [str(shadow)])
+        self.assertIn(f' -p {shadow + margin},{shadow + margin} ', text)              # the artwork
+        self.assertIn(f'${{goto {shadow + column}}}', text)                           # the title
+        self.assertEqual(draw['label'], [str(column), str(nowplaying.ART_TOP)])      # the card's
+        self.assertEqual(regions['lyrics'][2], margin + 505)
 
     def test_text_scale_leaves_the_layout_in_place(self):
         _, draw, regions = self.render((505, 105, 1.0))

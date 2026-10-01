@@ -17,6 +17,10 @@ DEFAULTS = (505, 63, 1.0)                  # 63: three lines of lyrics at text s
 # The width and height go as far as the monitor allows, which conky-mouse.py works out
 # while dragging; their upper limits here only catch a hand-edited file.
 LIMITS = ((400, 9999), (16, 99999), (0.7, 2.0))
+# Conky's window is the widget's rounded card plus this margin (logical px) on every side,
+# which draw.lua paints the card's drop shadow into. The sizes above, the saved position and
+# every click region are the card's; conky-mouse.py makes the margin pass clicks through.
+SHADOW = 16
 
 
 def clamp(v, low, high):

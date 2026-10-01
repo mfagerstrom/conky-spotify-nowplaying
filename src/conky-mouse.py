@@ -16,8 +16,17 @@ helper subscribes to clicks on conky's window itself:
     synced ones under the tray menu's Static): scroll them a line at a time. draw.lua reads
     the offset from lyrics-scroll. The wheel does nothing anywhere else.
 
-Hit areas come from nowplaying.py (regions.json, logical px, window-relative), since the
-controls move when titles wrap.
+Hit areas come from nowplaying.py (regions.json, logical px, from the card's top left), since
+the controls move when titles wrap. Conky's window is the widget's rounded card plus a margin
+on every side (widget_size.SHADOW) that draw.lua paints the card's shadow in. Everything here
+works on the card: the edges that resize, the position saved, the room left on a monitor.
+The window's input shape is the card alone, so a click on the shadow goes to whatever is
+under it.
+
+The pointer over the card is the cursor theme's own arrow, set on the window like the resize
+cursors are, never the X server's root cursor: under XWayland with native scaling that one is
+loaded at the unscaled cursor size, and shows at half the size or less (Xcursor.size, which
+X font cursors load at, carries the scale).
 
 The position lives in ~/.config/conky-spotify-nowplaying/position, not in conky.conf:
 rewriting conky.conf makes conky reload and flash. Instead this helper keeps the window
@@ -75,7 +84,10 @@ EDGE = 6                                          # logical px along the border 
 CORNER = 24                                       # how far from a corner both of its edges resize
 RESCALED = 75                                     # exit status: Xft.dpi changed (the launcher's too)
 # X cursor font shapes (X11/cursorfont.h), by the edges a press there resizes.
-CURSORS = {'l': 70, 'r': 96, 't': 138, 'b': 16, 'lt': 134, 'rt': 136, 'lb': 12, 'rb': 14}
+# '' is the arrow anywhere else on the card (left_ptr).
+CURSORS = {'': 68, 'l': 70, 'r': 96, 't': 138, 'b': 16, 'lt': 134, 'rt': 136, 'lb': 12, 'rb': 14}
+SHAPE_INPUT, SHAPE_SET, UNSORTED = 2, 0, 0         # X Shape extension
+SHADOW = widget_size.SHADOW                        # logical px of shadow around the card
 
 x11 = ctypes.CDLL('libX11.so.6')
 x11.XOpenDisplay.restype = ctypes.c_void_p
@@ -92,7 +104,6 @@ x11.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong] + [ctypes.c_void_p
 x11.XCreateFontCursor.restype = ctypes.c_ulong
 x11.XCreateFontCursor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
 x11.XDefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong]
-x11.XUndefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 x11.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p]
 x11.XCreatePixmap.restype = ctypes.c_ulong
 x11.XCreatePixmap.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint]
@@ -117,6 +128,10 @@ x11.XSetWMNormalHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void
 # Windows vanish when conky restarts; don't let the resulting X errors kill the helper.
 ERROR_HANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(lambda d, e: 0)
 x11.XSetErrorHandler(ERROR_HANDLER)
+xext = ctypes.CDLL('libXext.so.6')
+xext.XShapeCombineRectangles.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                                         ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                         ctypes.c_int]
 
 
 class XButtonEvent(ctypes.Structure):
@@ -161,6 +176,11 @@ class XSizeHints(ctypes.Structure):
         'x', 'y', 'width', 'height', 'min_width', 'min_height', 'max_width', 'max_height',
         'width_inc', 'height_inc', 'min_aspect_x', 'min_aspect_y', 'max_aspect_x', 'max_aspect_y',
         'base_width', 'base_height', 'win_gravity')]
+
+
+class XRectangle(ctypes.Structure):
+    _fields_ = [('x', ctypes.c_short), ('y', ctypes.c_short),
+                ('width', ctypes.c_ushort), ('height', ctypes.c_ushort)]
 
 
 class XEvent(ctypes.Union):
@@ -228,6 +248,35 @@ def geometry(d, win):
     x11.XGetGeometry(d, win, ctypes.byref(root), ctypes.byref(x), ctypes.byref(y),
                      ctypes.byref(w), ctypes.byref(h), ctypes.byref(b), ctypes.byref(depth))
     return x.value, y.value, w.value, h.value
+
+
+def card_of(rect, s):
+    """The card's (x, y, w, h) in a window at `rect`: the window less the shadow margin on
+    every side, at display scale s."""
+    x, y, w, h = rect
+    m = SHADOW * s
+    return x + m, y + m, w - 2 * m, h - 2 * m
+
+
+def window_of(rect, s):
+    """The window's (x, y, w, h) around a card at `rect`; card_of() turned round."""
+    x, y, w, h = rect
+    m = SHADOW * s
+    return x - m, y - m, w + 2 * m, h + 2 * m
+
+
+def on_card(x, y, w, h):
+    """Whether card-relative (x, y) is on a w x h card."""
+    return 0 <= x < w and 0 <= y < h
+
+
+def set_input_shape(d, win, w, h, s):
+    """Takes clicks on the card only, out of the window's w x h, so the shadow passes them to
+    whatever is under it."""
+    m = SHADOW * s
+    rect = XRectangle(m, m, max(w - 2 * m, 1), max(h - 2 * m, 1))
+    xext.XShapeCombineRectangles(d, win, SHAPE_INPUT, 0, 0, ctypes.byref(rect), 1, SHAPE_SET, UNSORTED)
+    x11.XFlush(d)
 
 
 def pointer(d, root):
@@ -346,12 +395,11 @@ def without_idle_edges(edges, regions):
 
 
 def set_cursor(d, win, edges, cache={}):
-    if edges:
-        if edges not in cache:
-            cache[edges] = x11.XCreateFontCursor(d, CURSORS[edges])
-        x11.XDefineCursor(d, win, cache[edges])
-    else:
-        x11.XUndefineCursor(d, win)
+    """The resize cursor for `edges`, or the arrow for ''. Both come from the cursor theme
+    at Xcursor.size, through libX11's font cursors."""
+    if edges not in cache:
+        cache[edges] = x11.XCreateFontCursor(d, CURSORS[edges])
+    x11.XDefineCursor(d, win, cache[edges])
     x11.XFlush(d)
 
 
@@ -418,7 +466,8 @@ def resize(d, root, win, edges, s, regions):
     copy of the widget over conky's window while it takes the new size. Returns the window's
     new position and size, or None if nothing changed."""
     old = new = widget_size.load()
-    start = wx, wy, w, h = geometry(d, win)
+    window = geometry(d, win)
+    start = wx, wy, w, h = card_of(window, s)
     mon = monitor_for(wx, wy, w, h)
     if mon:                                     # the room on the dragged side, to the monitor's edge
         mx, my, mw, mh = mon
@@ -427,7 +476,7 @@ def resize(d, root, win, edges, s, regions):
     else:
         room_x = room_y = math.inf
     px, py, mask = pointer(d, root)
-    log(f'resize start: {edges} at {old}, window {wx},{wy} {w}x{h}')
+    log(f'resize start: {edges} at {old}, card {wx},{wy} {w}x{h}')
     frame = outline(d, root)
     g = start
     try:
@@ -445,7 +494,8 @@ def resize(d, root, win, edges, s, regions):
     if new == old:
         log('resize end: unchanged')
         return None
-    shade = cover(d, root, win, start, (0, 0))
+    shade = cover(d, root, win, window, (0, 0))
+    goal = window_of(g, s)
     try:
         widget_size.save(new)
         # nowplaying.py lays the widget out again and conky resizes its window, from its top
@@ -453,21 +503,24 @@ def resize(d, root, win, edges, s, regions):
         deadline, shown = time.monotonic() + 1, None
         while time.monotonic() < deadline and (shown is None or time.monotonic() < shown):
             x, y, cw, ch = geometry(d, win)
-            if near((cw, ch), g[2:]):
-                if (x, y) != g[:2]:
-                    x11.XMoveWindow(d, win, *g[:2])
+            if near((cw, ch), goal[2:]):
+                if (x, y) != goal[:2]:
+                    x11.XMoveWindow(d, win, *goal[:2])
                     x11.XFlush(d)
                 elif shown is None:
                     shown = time.monotonic() + COVER_HOLD
             time.sleep(0.01)
     finally:
         uncover(d, shade)
+    set_input_shape(d, win, *goal[2:], s)
     x, y = clamp_to_monitor(*g)
-    log(f'resize end: {new}, window {g[2]}x{g[3]} -> saved {x},{y}')
+    log(f'resize end: {new}, card {g[2]}x{g[3]} -> saved {x},{y}')
     return x, y, *g[2:]
 
 
-def drag(d, root, win):
+def drag(d, root, win, s):
+    """Move the window with the pointer while the button is held; returns the card's
+    position, kept on its monitor, and size."""
     wx, wy, w, h = geometry(d, win)
     px, py, mask = pointer(d, root)
     log(f'drag start: window {wx},{wy} pointer {px},{py}')
@@ -480,10 +533,10 @@ def drag(d, root, win):
             last_logged = time.monotonic()
             log(f'  pointer {nx},{ny} mask {mask:#x}')
         time.sleep(0.01)
-    x, y, _, _ = geometry(d, win)
-    cx, cy = clamp_to_monitor(x, y, w, h)
-    log(f'drag end: window {x},{y} -> saved {cx},{cy}')
-    return cx, cy, w, h
+    x, y, cw, ch = card_of(geometry(d, win), s)
+    cx, cy = clamp_to_monitor(x, y, cw, ch)
+    log(f'drag end: card {x},{y} -> saved {cx},{cy}')
+    return cx, cy, cw, ch
 
 
 def load_on_top():
@@ -563,7 +616,7 @@ def seek(d, root, win, regions, s):
     """Follow the pointer along the bar (draw.lua shows the preview), seek on release."""
     bx0, bx1 = regions['bar']
     duration = regions['duration']
-    wx, _, _, _ = geometry(d, win)
+    wx, _, _, _ = card_of(geometry(d, win), s)
     fraction, mask = 0.0, BUTTON1_MASK
     while mask & BUTTON1_MASK:
         px, _, mask = pointer(d, root)
@@ -590,6 +643,7 @@ def main():
     root = x11.XDefaultRootWindow(d)
     win, last_check, hidden = None, 0.0, None   # None: not known, e.g. after a restart
     cursor = None                                # the edges whose cursor win shows; None: not set
+    shaped, last_shape = None, 0.0               # (win, w, h, s) the input shape was set for
     above, last_on_top = None, 0.0               # the always-on-top state win has; None: not set
     logged_on_top = None
     s = scale()                                  # refreshed on each click; motion uses the last
@@ -613,14 +667,19 @@ def main():
             if current:
                 if current != win:
                     log(f'attached to 0x{current:x}')
-                    cursor = None
                 win = current
                 above = None                           # sent again below; a no-op if it held
                 x11.XSelectInput(d, win, BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK)
-                x, y, w, h = geometry(d, win)
+                # A rebuilt window has neither the cursor nor the input shape: set both again.
+                cursor = cursor or ''                  # the arrow until the pointer says otherwise
+                set_cursor(d, win, cursor)
+                shaped = None
+                ws = scale_of(at)
+                x, y, w, h = card_of(geometry(d, win), ws)
                 target = clamp_to_monitor(*resolved[:2], w, h, mons) if saved else (x, y)
+                window_target = window_of((*target, w, h), ws)[:2]
                 if (x, y) != target:
-                    x11.XMoveWindow(d, win, *target)
+                    x11.XMoveWindow(d, win, *window_target)
                 if saved:                              # a file from before anchors gets one here
                     anchor = resolved[2] or anchor_for(*target, w, h, mons, scale_of(at))
                     if (*target, anchor) != saved:     # x y for conky.conf; the anchor stays
@@ -630,13 +689,21 @@ def main():
                 if hide:
                     x11.XUnmapWindow(d, win)
                 elif hidden is not False:              # a no-op when already mapped
-                    hint_position(d, win, *target)
+                    hint_position(d, win, *window_target)
                     x11.XMapWindow(d, win)
                     above = None                       # the window manager forgets it when unmapped
                     if hidden:
                         log('shown')
                 hidden = hide
                 x11.XFlush(d)
+        # The input shape follows the window's size, which changes with a title's wrapping,
+        # within a tenth of a second; conky's reloads are covered by the reset above.
+        if win and now - last_shape > 0.1:
+            last_shape = now
+            _, _, w, h = geometry(d, win)
+            if (win, w, h, s) != shaped:
+                set_input_shape(d, win, w, h, s)
+                shaped = (win, w, h, s)
         # The tray's toggle takes effect within a tenth of a second.
         if win and not hidden and now - last_on_top > 0.1:
             last_on_top = now
@@ -651,11 +718,12 @@ def main():
             x11.XNextEvent(d, ctypes.byref(ev))
             b = ev.xbutton
             if ev.type == MOTION_NOTIFY and b.window == win:
-                _, _, w, h = geometry(d, win)
-                edges = resize_edges(b.x, b.y, w, h, s)
+                _, _, w, h = card_of(geometry(d, win), s)
+                x, y = b.x - SHADOW * s, b.y - SHADOW * s    # card-relative
+                edges = resize_edges(x, y, w, h, s) if on_card(x, y, w, h) else ''
                 if edges:
                     regions = load_regions()
-                    if region_at(regions, s, b.x, b.y):
+                    if region_at(regions, s, x, y):
                         edges = ''               # a control reaching the border wins
                     else:
                         edges = without_idle_edges(edges, regions)
@@ -663,13 +731,16 @@ def main():
                     set_cursor(d, win, edges)
                     cursor = edges
             elif ev.type == BUTTON_PRESS and b.button in (WHEEL_UP, WHEEL_DOWN) and b.window == win:
-                scroll_lyrics(load_regions(), s, b.x, b.y, b.button == WHEEL_DOWN)
+                scroll_lyrics(load_regions(), s, b.x - SHADOW * s, b.y - SHADOW * s, b.button == WHEEL_DOWN)
             elif ev.type == BUTTON_PRESS and b.button == 1 and b.window == win:
                 s = scale()
+                _, _, w, h = card_of(geometry(d, win), s)
+                x, y = b.x - SHADOW * s, b.y - SHADOW * s    # card-relative
+                if not on_card(x, y, w, h):
+                    continue                     # the shadow, while the input shape is not set
                 regions = load_regions()
-                hit = region_at(regions, s, b.x, b.y)
-                _, _, w, h = geometry(d, win)
-                edges = resize_edges(b.x, b.y, w, h, s)
+                hit = region_at(regions, s, x, y)
+                edges = resize_edges(x, y, w, h, s)
                 edges = without_idle_edges(edges, regions)
                 if hit == 'heart':
                     logged_in = os.path.exists(os.path.join(CONF, 'spotify-token.json'))
@@ -702,7 +773,7 @@ def main():
                     if placed:
                         remember(*placed)
                 else:
-                    remember(*drag(d, root, win))
+                    remember(*drag(d, root, win, s))
         time.sleep(0.02)
 
 

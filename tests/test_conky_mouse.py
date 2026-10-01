@@ -184,6 +184,28 @@ class ResizeEdgesTest(unittest.TestCase):
                                                       for y in (0, H, 2 * H - 1)} - {''})
 
 
+class CardTest(unittest.TestCase):
+
+    def test_the_card_is_the_window_less_the_shadow_on_every_side(self):
+        m = conky_mouse.SHADOW
+        self.assertEqual(conky_mouse.card_of((100, 200, W, H), 1), (100 + m, 200 + m, W - 2 * m, H - 2 * m))
+        self.assertEqual(conky_mouse.card_of((100, 200, W, H), 2),
+                         (100 + 2 * m, 200 + 2 * m, W - 4 * m, H - 4 * m))
+        for s in (1, 2):
+            self.assertEqual(conky_mouse.window_of(conky_mouse.card_of((100, 200, W, H), s), s),
+                             (100, 200, W, H))
+
+    def test_the_shadow_is_off_the_card(self):
+        self.assertTrue(conky_mouse.on_card(0, 0, W, H))
+        self.assertTrue(conky_mouse.on_card(W - 1, H - 1, W, H))
+        for x, y in ((-1, 10), (10, -1), (W, 10), (10, H)):
+            with self.subTest(x=x, y=y):
+                self.assertFalse(conky_mouse.on_card(x, y, W, H))
+
+    def test_the_arrow_has_a_cursor_of_its_own(self):
+        self.assertIn('', conky_mouse.CURSORS)
+
+
 class DraggedTest(unittest.TestCase):
     ROOM = 10 ** 6            # the monitor's room left over; most tests stay well inside it
 

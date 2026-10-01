@@ -1,6 +1,7 @@
 -- Cairo drawing for the widget, fed by nowplaying.py:
---   draw.txt      geometry (logical px) + a playback clock, rewritten 4x a second; its scale
---                 line is the display's scale, the lyrics' text scale and the times'
+--   draw.txt      geometry (logical px, from the card's top left) + a playback clock, rewritten
+--                 4x a second; its scale line is the display's scale, the lyrics' text scale
+--                 and the times', its shadow line the margin around the card
 --   lyrics.txt    lyric lines, rewritten when the track's lyrics change: timed under a
 --                 'synced' header, untimed under 'plain'
 --   lyrics-scroll the plain lyrics' line offset, which conky-mouse.py sets with the wheel
@@ -13,7 +14,8 @@ require 'cairo'
 pcall(require, 'cairo_xlib')
 
 local cache = os.getenv('HOME') .. '/.cache/conky-spotify-nowplaying/'
-local hover_x, hover_y = -1, -1
+local hover_x, hover_y = -1, -1          -- window px
+local margin = 0                          -- the shadow margin around the card, in window px
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
 -- Foreground: white on dark or saturated backgrounds, near-black on light ones, whichever
 -- contrasts more with the background as it fades (nowplaying.py's LIGHT_FG and DARK_FG).
@@ -142,17 +144,55 @@ function conky_fg(which)
                          math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5))
 end
 
+local function rounded_rect(cr, x, y, w, h, rad)
+    cairo_new_sub_path(cr)
+    cairo_arc(cr, x + w - rad, y + rad, rad, -math.pi / 2, 0)
+    cairo_arc(cr, x + w - rad, y + h - rad, rad, 0, math.pi / 2)
+    cairo_arc(cr, x + rad, y + h - rad, rad, math.pi / 2, math.pi)
+    cairo_arc(cr, x + rad, y + rad, rad, math.pi, 3 * math.pi / 2)
+    cairo_close_path(cr)
+end
+
+-- logical px; logical px right and down; alpha at the card's edge. The blur plus each offset
+-- stays within nowplaying.py's SHADOW margin (16).
+local SHADOW_BLUR, SHADOW_RIGHT, SHADOW_DROP, SHADOW_ALPHA = 7, 5, 4, 0.32
+
+local function draw_shadow(cr, x, y, w, h, rad, s)
+    -- A soft black shadow around the card, SHADOW_RIGHT to the right and SHADOW_DROP lower,
+    -- fading out over SHADOW_BLUR: one rounded rectangle a pixel wider per step, biggest
+    -- first, each alpha chosen so the stack reaches SHADOW_ALPHA * (1 - d / blur)^2 at d px
+    -- from the card's edge. Clipped to outside the card, which is translucent and would show
+    -- it through.
+    local blur, right, drop = SHADOW_BLUR * s, SHADOW_RIGHT * s, SHADOW_DROP * s
+    local function target(d) return SHADOW_ALPHA * (1 - d / blur) ^ 2 end
+    cairo_save(cr)
+    cairo_rectangle(cr, 0, 0, conky_window.width, conky_window.height)
+    rounded_rect(cr, x, y, w, h, rad)
+    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD)
+    cairo_clip(cr)
+    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING)
+    for k = blur, 1, -1 do
+        local a = 1 - (1 - target(k - 1)) / (1 - target(k))
+        local e = k - 1                            -- how far this layer reaches past the card
+        rounded_rect(cr, x + right - e, y + drop - e, w + 2 * e, h + 2 * e, rad + e)
+        cairo_set_source_rgba(cr, 0, 0, 0, a)
+        cairo_fill(cr)
+    end
+    cairo_restore(cr)
+end
+
 function conky_draw_background()
+    -- the card, inset by the shadow margin draw.txt gives, and its shadow in that margin
     if conky_window == nil then return end
-    local w, h = conky_window.width, conky_window.height
+    local d = load_draw()
+    local s = d.scale and d.scale[1] or 1
+    margin = (d.shadow and d.shadow[1] or 0) * s
+    local w, h = conky_window.width - 2 * margin, conky_window.height - 2 * margin
+    if w <= 0 or h <= 0 then return end
     local rad = math.min(24, h / 4)
     with_cairo(function(cr)
-        cairo_new_sub_path(cr)
-        cairo_arc(cr, w - rad, rad, rad, -math.pi / 2, 0)
-        cairo_arc(cr, w - rad, h - rad, rad, 0, math.pi / 2)
-        cairo_arc(cr, rad, h - rad, rad, math.pi / 2, math.pi)
-        cairo_arc(cr, rad, rad, rad, math.pi, 3 * math.pi / 2)
-        cairo_close_path(cr)
+        if margin > 0 then draw_shadow(cr, margin, margin, w, h, rad, s) end
+        rounded_rect(cr, margin, margin, w, h, rad)
         cairo_set_source_rgba(cr, bg[1], bg[2], bg[3], 0.94)
         cairo_fill(cr)
     end)
@@ -181,7 +221,9 @@ local function triangle(cr, cx, cy, h, dir)
 end
 
 local function hovered(x0, y0, x1, y1)
-    return hover_x >= x0 and hover_x <= x1 and hover_y >= y0 and hover_y <= y1
+    -- whether the pointer is over the box, given from the card's top left like draw.txt
+    local x, y = hover_x - margin, hover_y - margin
+    return hover_x >= 0 and x >= x0 and x <= x1 and y >= y0 and y <= y1
 end
 
 local function skip_icon(cr, cx, cy, size, forward)
@@ -397,18 +439,38 @@ local function plain_offset(last)
     return math.min(math.max(tonumber(offset) or 0, 0), last)
 end
 
+local function draw_scrollbar(cr, x, top, height, s, rows, count, at, last)
+    -- A slim vertical bar centred on x, drawn like the seek bar: the track, and a thumb as
+    -- long as the share of the lines that shows, from the top at offset 0 to the bottom at
+    -- the last offset
+    local w = 4 * s
+    local y0, y1 = top + w / 2, top + height - w / 2  -- the round caps stay inside the area
+    local len = (y1 - y0) * math.min(rows / count, 1)
+    local ty = y0 + (y1 - y0 - len) * math.min(math.max(at / last, 0), 1)
+    set(cr, fg, 0.3)
+    rounded_line(cr, x, y0, x, y1, w)
+    set(cr, fg)
+    rounded_line(cr, x, ty, x, ty + len, w)
+end
+
 local function draw_plain_lyrics(cr, l, s, text)
     -- A static block from the first line down, which only the mouse wheel moves: every line
-    -- alike (11 pt, regular, full foreground), no current line and no fade at the edges.
+    -- alike (11 pt, regular, full foreground), no current line and no fade at the edges. A
+    -- scrollbar along the right edge shows where the view is when not every line fits.
     local x0, x1, top, row, height = l[1] * s, l[2] * s, l[3] * s, l[4] * s, l[6] * s
     local rows = height / row
     local lines = lyrics.lines
     if #lines == 0 then return end
     -- the last offset shows the last line at the bottom; nowplaying.py gives conky-mouse.py
     -- the same limit
-    local target = plain_offset(math.max(0, math.ceil(#lines - rows - 1e-3)))
+    local last = math.max(0, math.ceil(#lines - rows - 1e-3))
+    local target = plain_offset(last)
     if scroll == nil then scroll = target end
     scroll = scroll + (target - scroll) * (1 - math.exp(-dt() * 12 / 1.1))   -- ~0.33 s glide
+    if last > 0 then
+        draw_scrollbar(cr, x1 - 2 * s, top, height, s, rows, #lines, scroll, last)
+        x1 = x1 - 12 * s                           -- the lines stop short of the bar
+    end
 
     cairo_save(cr)
     cairo_rectangle(cr, x0, top, x1 - x0, height)
@@ -440,6 +502,7 @@ function conky_draw_bar()
     end
 
     with_cairo(function(cr)
+        if d.shadow then cairo_translate(cr, d.shadow[1] * s, d.shadow[1] * s) end   -- onto the card
         if d.window then draw_window_buttons(cr, d.window, s) end
         if d.heart then draw_heart(cr, d.heart, s) end
         if d.label then draw_label(cr, d.label, s, times_text) end
