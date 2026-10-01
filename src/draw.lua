@@ -17,7 +17,7 @@ local hover_x, hover_y = -1, -1
 local bg = {0.094, 0.094, 0.094}          -- current (fading) colour; starts at Spotify's #181818
 -- Foreground: white on dark or saturated backgrounds, near-black on light ones, whichever
 -- contrasts more with the background as it fades (nowplaying.py's LIGHT_FG and DARK_FG).
--- nowplaying.py nudges the backgrounds it picks until one of the two reaches APCA Lc 60.
+-- nowplaying.py only picks backgrounds on which one of the two reaches APCA Lc 60.
 local LIGHT, DARK = {1, 1, 1}, {0.07, 0.07, 0.07}
 local fg, fg_back = LIGHT, DARK           -- fg_back: drawn on fg, like the play icon
 local clock = {stamp = nil, pos = 0, playing = false}
