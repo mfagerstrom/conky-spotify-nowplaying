@@ -155,7 +155,7 @@ local function rounded_rect(cr, x, y, w, h, rad)
 end
 
 -- logical px; logical px right and down; alpha at the card's edge. The blur plus each offset
--- stays within nowplaying.py's SHADOW margin (16).
+-- stays within widget_size.py's SHADOW margin (16).
 local SHADOW_BLUR, SHADOW_RIGHT, SHADOW_DROP, SHADOW_ALPHA = 7, 5, 4, 0.32
 
 local function draw_shadow(cr, x, y, w, h, rad, s)
