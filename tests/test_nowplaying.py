@@ -18,16 +18,16 @@ nowplaying = support.load_nowplaying()
 
 from gi.repository import GdkPixbuf, GLib  # noqa: E402  (after nowplaying pins the versions)
 
-SIZE = 48   # art_colour samples the cover at 48x48; covers this size are read as drawn
+SIZE = 48   # art_colour samples 128x128 by nearest pixel, so a cover this size reads as drawn
 
 
 class ArtColourTest(support.TempDirTest):
 
-    def cover(self, pixel):
-        """Saves a SIZE x SIZE PNG whose pixel (x, y) is pixel(x, y) -> (r, g, b), 0-255."""
-        data = bytes(c for y in range(SIZE) for x in range(SIZE) for c in pixel(x, y))
+    def cover(self, pixel, size=SIZE):
+        """Saves a size x size PNG whose pixel (x, y) is pixel(x, y) -> (r, g, b), 0-255."""
+        data = bytes(c for y in range(size) for x in range(size) for c in pixel(x, y))
         pb = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(data), GdkPixbuf.Colorspace.RGB,
-                                             False, 8, SIZE, SIZE, SIZE * 3)
+                                             False, 8, size, size, size * 3)
         path = os.path.join(self.dir, f'cover-{len(os.listdir(self.dir))}.png')
         pb.savev(path, 'png', [], [])
         return path
@@ -175,6 +175,12 @@ class ArtColourTest(support.TempDirTest):
         orange, white = (0xe4, 0x4a, 0x02), (250, 250, 250)
         path = self.cover(lambda x, y: orange if y < 36 else white)
         self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+
+    def test_thin_lines_on_a_large_cover_keep_their_own_colour(self):
+        # Devout: thin red strokes on light gray. Averaged down to 48x48 they read as pink.
+        gray, red = (222, 222, 224), (252, 52, 65)
+        path = self.cover(lambda x, y: red if x % 160 < 6 else gray, size=640)
+        self.assertEqual(self.picked(path), red)
 
     def test_a_glaring_colour_never_gives_way_to_a_stray_gray_pixel(self):
         orange, white, gray = (252, 74, 11), (250, 250, 250), (150, 138, 131)

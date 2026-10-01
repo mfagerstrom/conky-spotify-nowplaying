@@ -224,7 +224,10 @@ def cell_colours(pixels, floor, strict=False):
 
 def art_colour(path):
     """Spotify-style backdrop: the cover's biggest vivid colour (if it covers at least 5%
-    of the image, else its dominant colour), as a colour one of its pixels has. On a mostly
+    of the image, else its dominant colour), as a colour one of its pixels has. The cover is
+    sampled 128x128 by nearest pixel, never averaged: averaging blends thin lines into their
+    background, a red line on gray into a pink the cover does not have. On a 640px cover
+    that is every fifth pixel, so no stroke 5px wide or more is missed. On a mostly
     grayscale cover, any small splash of colour beats the gray/black, and a grayish or
     near-black dominant colour loses to the cover's main hue once colour fills 10% of it.
     A bright colour on a mostly dark cover (60% of it under a third of full value), like a
@@ -238,7 +241,8 @@ def art_colour(path):
     till every colour has been tried. Only then does it give way to the cover's own black or
     gray (never its white), its most common usable one. A cover with no usable colour gets
     FALLBACK_BG."""
-    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
+    pb = GdkPixbuf.Pixbuf.new_from_file(path)
+    pb = pb.scale_simple(128, 128, GdkPixbuf.InterpType.NEAREST)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
     buckets, accents, pixels, neutrals = {}, {}, [], []
     for yy in range(pb.get_height()):
@@ -260,7 +264,7 @@ def art_colour(path):
     vivid = [t for t in buckets.values() if t[4]]
     dominant = max(buckets.values())
     _, dsat, dv = colorsys.rgb_to_hsv(*(c / dominant[0] for c in dominant[1:4]))
-    floor = 0.004 * total                        # ~9px keeps JPEG noise from winning
+    floor = 0.004 * total                        # ~66px keeps JPEG noise from winning
     if len(neutrals) >= 0.85 * total and accent and accent[0] >= floor:
         best = accent
     elif vivid and max(vivid)[0] >= 0.05 * total:
