@@ -1,5 +1,5 @@
-"""Tests for conky-mouse.py's placement (keeping the window on screen across monitors),
-resizing (which edges a press drags, and the size settings a drag leads to), and the wheel
+"""Tests for conky-mouse.py's placement (keeping the window on screen across monitors, and
+on its own monitor as monitors come and go and the display scale changes), resizing (which edges a press drags, and the size settings a drag leads to), and the wheel
 over plain lyrics."""
 import os
 import time
@@ -12,7 +12,8 @@ conky_mouse = support.load_conky_mouse()
 
 W, H = 545, 200   # about the widget's size
 # Two 1920x1080 monitors side by side, and a third above the first one.
-MONITORS = [(0, 0, 1920, 1080, True), (1920, 0, 1920, 1080, False), (0, -1080, 1920, 1080, False)]
+MONITORS = [(0, 0, 1920, 1080, True, 'DP-1'), (1920, 0, 1920, 1080, False, 'DP-2'),
+            (0, -1080, 1920, 1080, False, 'DP-3')]
 
 
 class ClampToMonitorTest(unittest.TestCase):
@@ -47,6 +48,110 @@ class ClampToMonitorTest(unittest.TestCase):
         self.assertEqual(self.clamp(-3000, 400), (0, 400))          # far left: the first
         self.assertEqual(self.clamp(2500, 3000), (2500, 1080 - H))  # below the second
         self.assertEqual(self.clamp(500, -4000), (500, -1080))      # above: the one on top
+
+
+class PositionTest(support.TempDirTest):
+
+    def setUp(self):
+        super().setUp()
+        self.redirect(conky_mouse, CONF='.', POSITION='position')
+
+    def test_saved_with_its_anchor_and_read_back(self):
+        anchor = conky_mouse.anchor_for(2500, 400, W, H, MONITORS, 1)
+        self.assertEqual(anchor, ('DP-2', 580, 400, 1920, 1))
+        conky_mouse.save_position(2500, 400, anchor)
+        self.assertEqual(support.read(conky_mouse.POSITION), '2500 400 DP-2 580 400 1920 1\n')
+        self.assertEqual(conky_mouse.load_position(), (2500, 400, anchor))
+
+    def test_a_file_without_a_whole_anchor_reads_without_one(self):
+        for text in ('2044 12\n', '2044 12 eDP-1 2044 12 192\n', '2044 12 eDP-1 a b c d\n',
+                     '2044 12 eDP-1 2044 12 0 2\n', '2044 12 eDP-1 2044 12 3072 0\n'):
+            with self.subTest(text=text):
+                with open(conky_mouse.POSITION, 'w') as f:
+                    f.write(text)
+                self.assertEqual(conky_mouse.load_position(), (2044, 12, None))
+        conky_mouse.save_position(2044, 12, None)
+        self.assertEqual(support.read(conky_mouse.POSITION), '2044 12\n')
+
+    def test_missing_or_bad_file_is_no_position(self):
+        self.assertIsNone(conky_mouse.load_position())
+        for text in ('left top\n', '2044\n'):
+            with self.subTest(text=text):
+                with open(conky_mouse.POSITION, 'w') as f:
+                    f.write(text)
+                self.assertIsNone(conky_mouse.load_position())
+
+    def test_no_anchor_without_monitors(self):
+        self.assertIsNone(conky_mouse.anchor_for(100, 100, W, H, [], 1))
+
+
+def doubled(mons):
+    return [(x * 2, y * 2, w * 2, h * 2, p, n) for x, y, w, h, p, n in mons]
+
+
+class ResolveTest(unittest.TestCase):
+
+    SAVED = (2500, 400, ('DP-2', 580, 400, 1920, 1))
+
+    def test_unchanged_monitors_keep_the_position(self):
+        self.assertEqual(conky_mouse.resolve(self.SAVED, MONITORS, 1), self.SAVED)
+
+    def test_follows_its_monitor_when_another_is_removed(self):
+        # The first monitor unplugged: the second slides over to x = 0.
+        mons = [(0, 0, 1920, 1080, True, 'DP-2')]
+        self.assertEqual(conky_mouse.resolve(self.SAVED, mons, 1), (580, 400, self.SAVED[2]))
+
+    def test_follows_its_monitor_when_one_is_added_before_it(self):
+        mons = [(0, 0, 3072, 1920, False, 'eDP-1')] + [(x + 3072, y, w, h, p, n) for x, y, w, h, p, n in MONITORS]
+        self.assertEqual(conky_mouse.resolve(self.SAVED, mons, 1)[:2], (3072 + 1920 + 580, 400))
+
+    def test_its_monitor_gone_keeps_where_it_was(self):
+        mons = [MONITORS[0]]
+        self.assertEqual(conky_mouse.resolve(self.SAVED, mons, 1), self.SAVED)
+        with mock.patch.object(conky_mouse, 'monitors', return_value=mons):   # then kept on screen
+            self.assertEqual(conky_mouse.clamp_to_monitor(2500, 400, W, H), (1920 - W, 400))
+
+    def test_a_scale_change_follows_its_monitors_width(self):
+        self.assertEqual(conky_mouse.resolve(self.SAVED, doubled(MONITORS), 2),
+                         (3840 + 1160, 800, ('DP-2', 1160, 800, 3840, 2)))
+
+    def test_its_monitor_scaled_before_xft_dpi_follows(self):
+        # XWayland's coordinates and Xft.dpi change a moment apart: the width decides.
+        self.assertEqual(conky_mouse.resolve(self.SAVED, doubled(MONITORS), 1)[:2], (3840 + 1160, 800))
+
+    def test_text_scaling_alone_moves_nothing(self):
+        # Large Text raises Xft.dpi but not the scale or any monitor's width.
+        self.assertEqual(conky_mouse.resolve(self.SAVED, MONITORS, conky_mouse.scale_of(120))[:2], (2500, 400))
+
+    def test_its_monitor_gone_scales_with_the_display(self):
+        self.assertEqual(conky_mouse.resolve(self.SAVED, doubled(MONITORS)[:1], 2),
+                         (5000, 800, ('DP-2', 1160, 800, 3840, 2)))
+
+    def test_and_back_again(self):
+        there = conky_mouse.resolve(self.SAVED, doubled(MONITORS), 2)
+        self.assertEqual(conky_mouse.resolve(there, MONITORS, 1), self.SAVED)
+        there = conky_mouse.resolve(self.SAVED, doubled(MONITORS)[:1], 2)
+        self.assertEqual(conky_mouse.resolve(there, MONITORS, 1), self.SAVED)
+
+    def test_without_an_anchor_nothing_moves(self):
+        self.assertEqual(conky_mouse.resolve((2044, 12, None), MONITORS, 2), (2044, 12, None))
+
+
+class MonitorsTest(unittest.TestCase):
+
+    def test_names_and_the_primary_are_read(self):
+        out = (' 0: +*DP-9 3840/480x2160/270+6912+0  DP-9\n'
+               ' 1: +eDP-1 3072/290x1920/180+0+0  eDP-1\n')
+        with mock.patch('subprocess.run', return_value=mock.Mock(stdout='Monitors: 2\n' + out)):
+            self.assertEqual(conky_mouse.monitors(), [(6912, 0, 3840, 2160, True, 'DP-9'),
+                                                      (0, 0, 3072, 1920, False, 'eDP-1')])
+
+    def test_dpi_is_none_when_xrdb_has_none(self):
+        with mock.patch('subprocess.run', return_value=mock.Mock(stdout='Xft.dpi:\t192\n')):
+            self.assertEqual((conky_mouse.dpi(), conky_mouse.scale()), (192, 2))
+        with mock.patch('subprocess.run', return_value=mock.Mock(stdout='')):
+            self.assertEqual((conky_mouse.dpi(), conky_mouse.scale()), (None, 1))
+        self.assertEqual([conky_mouse.scale_of(v) for v in (96, 120, 192, None)], [1, 1, 2, 1])
 
 
 class ResizeEdgesTest(unittest.TestCase):

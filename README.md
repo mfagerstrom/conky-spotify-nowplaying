@@ -13,7 +13,9 @@ A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Co
 - A placeholder cover while Spotify's DJ talks between songs (or any track without artwork)
 - Background colour taken from the album art as it is, fading between tracks; the text and
   controls turn dark on a light background, so they stay readable on any cover
-- Drag the widget anywhere, on any monitor; its position is remembered
+- Drag the widget anywhere, on any monitor; its position is remembered. Plugging in or
+  unplugging a monitor keeps it where it was on its own monitor, at the same size, or moves
+  it onto the nearest one while its own is unplugged
 - Drag an edge or corner to resize it: the sides set its width, the top and bottom how many
   lines of lyrics it shows. An outline shows the new size until you let go; the text keeps
   its size, and the size is remembered
