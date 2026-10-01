@@ -1,3 +1,19 @@
+conky-spotify-nowplaying (1.5.1) resolute; urgency=medium
+
+  * Plugging in or unplugging a monitor keeps the widget where it was on
+    its own monitor and at the same size, instead of moving or rescaling
+    it.
+  * A title or artist containing # is shown in full; before, the rest of
+    the line was dropped and the widget came out too short, cutting off
+    the controls.
+  * The background is always a colour really on the album art, never a
+    lightened or darkened one. A vivid red or orange that would carry
+    white text gives way to a black or gray from the cover, and a bright
+    colour on a mostly dark cover to a deeper shade of it that the cover
+    also has. A cover with nothing suitable gets Spotify's dark gray.
+
+ -- mfagerstrom <48690419+mfagerstrom@users.noreply.github.com>  Thu, 01 Oct 2026 10:25:00 -0400
+
 conky-spotify-nowplaying (1.5.0) resolute; urgency=medium
 
   * The widget's background keeps the cover's own colour instead of
