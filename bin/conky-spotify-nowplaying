@@ -147,9 +147,11 @@ def supervise():
                 given_up.add(name)
                 continue
             if proc and proc.returncode == RESCALED:
-                children[name] = None          # handled once, even if its start waits below
-                for other in SCALED:           # started again on the next pass, in order
+                children[name] = None          # handled once
+                for other in SCALED:
                     end(children.get(other))
+                continue                       # all start on the next pass, nowplaying.py first,
+                                               # so this one gets the dpi it starts at
             if time.monotonic() - last_start.get(name, -10) < 2:   # don't spin if it keeps dying
                 continue
             if name == 'nowplaying':

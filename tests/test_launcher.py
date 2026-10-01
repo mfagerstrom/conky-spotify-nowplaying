@@ -88,7 +88,8 @@ class SuperviseTest(support.TempDirTest):
         self.assertEqual(sorted(self.names(started[4:])), ['conky', 'conky-mouse', 'nowplaying'])
         # conky-mouse.py compares with the Xft.dpi nowplaying.py started at, read again on its restart.
         self.assertEqual(self.envs[2], '192')
-        self.assertEqual(self.envs[self.names(started).index('nowplaying', 1)], '96')
+        self.assertEqual(self.names(started[4:]), ['nowplaying', 'conky', 'conky-mouse'])
+        self.assertEqual(self.envs[4:], ['96', '96', '96'])
 
     def test_any_other_exit_starts_only_that_one_again(self):
         def at_pass(n, procs):

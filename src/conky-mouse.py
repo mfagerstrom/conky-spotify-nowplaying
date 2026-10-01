@@ -268,6 +268,8 @@ def load_position():
         anchor = (fields[2], *map(int, fields[3:7])) if len(fields) >= 7 else None
     except ValueError:
         anchor = None
+    if anchor and min(anchor[3:]) <= 0:                 # resolve() divides by the width and scale
+        anchor = None
     return x, y, anchor
 
 

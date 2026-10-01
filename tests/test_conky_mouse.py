@@ -64,7 +64,8 @@ class PositionTest(support.TempDirTest):
         self.assertEqual(conky_mouse.load_position(), (2500, 400, anchor))
 
     def test_a_file_without_a_whole_anchor_reads_without_one(self):
-        for text in ('2044 12\n', '2044 12 eDP-1 2044 12 192\n', '2044 12 eDP-1 a b c d\n'):
+        for text in ('2044 12\n', '2044 12 eDP-1 2044 12 192\n', '2044 12 eDP-1 a b c d\n',
+                     '2044 12 eDP-1 2044 12 0 2\n', '2044 12 eDP-1 2044 12 3072 0\n'):
             with self.subTest(text=text):
                 with open(conky_mouse.POSITION, 'w') as f:
                     f.write(text)
