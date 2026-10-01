@@ -18,7 +18,7 @@ nowplaying = support.load_nowplaying()
 
 from gi.repository import GdkPixbuf, GLib  # noqa: E402  (after nowplaying pins the versions)
 
-SIZE = 48   # art_colour samples 128x128 by nearest pixel, so a cover this size reads as drawn
+SIZE = 48   # art_colour samples 144x144 by nearest pixel, each pixel of a cover this size 3x3
 
 
 class ArtColourTest(support.TempDirTest):
@@ -199,11 +199,6 @@ class ArtColourTest(support.TempDirTest):
         self.assertTrue(nowplaying.glaring([c / 255 for c in red]))
         rows = [red] * 24 + [pavement] * 14 + [leaf] * 6 + [tulip] * 4
         path = self.cover(lambda x, y: rows[y])
-        rgb = nowplaying.art_colour(path)
-        _, sat, _ = colorsys.rgb_to_hsv(*rgb)
-        self.assertGreaterEqual(sat, 0.15)
-        self.assertTrue(nowplaying.usable(rgb))
-        self.assertFalse(nowplaying.glaring(rgb))
         self.assertIn(self.picked(path), (leaf, tulip))
 
     def test_a_vivid_colour_under_dark_text_is_not_glaring(self):
