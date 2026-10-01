@@ -294,7 +294,7 @@ class LuaLyricRunsTest(unittest.TestCase):
             src = f.read()
         consts = re.search(r'^local FONT = .*$', src, re.M).group(0)
         funcs = src[src.index('local function lyric_runs'):src.index('local function load_lyrics')]
-        funcs += src[src.index('local function each_part'):src.index('local function advance')]
+        funcs += src[src.index('local function each_part'):src.index('local run_ext')]
         call = (f"each_part(lyric_runs({json.dumps(line, ensure_ascii=False)}), function(t, f) "
                 "io.write(t, '|', f, '\\n') end)")
         out = subprocess.run(['lua5.3', '-'], input='\n'.join([consts, funcs, call]),
@@ -315,6 +315,31 @@ class LuaLyricRunsTest(unittest.TestCase):
 
     def test_a_line_without_runs_is_ubuntu_sans_with_notes_in_noto_music(self):
         self.assertEqual(self.parts('♫ Группа крови'), [('♫', 'Noto Music'), (' Группа крови', 'Ubuntu Sans')])
+
+    def ellipsized(self, runs, width):
+        """draw.lua's ellipsize on runs, with every character one unit wide."""
+        with open(os.path.join(support.SRC, 'draw.lua')) as f:
+            src = f.read()
+        consts = re.search(r'^local FONT = .*$', src, re.M).group(0)
+        stub = ("local function advance(cr, runs) local w = 0 for _, r in ipairs(runs) do "
+                "w = w + utf8.len(r[1]) end return w end")
+        func = src[src.index('local function ellipsize'):src.index('local function show_runs')]
+        lua_runs = '{' + ', '.join(f'{{{json.dumps(t, ensure_ascii=False)}, {json.dumps(f)}}}'
+                                   for t, f in runs) + '}'
+        call = (f"for _, r in ipairs(ellipsize(nil, {lua_runs}, {width})) do "
+                "io.write(r[1], '|', r[2], '\\n') end")
+        out = subprocess.run(['lua5.3', '-'], input='\n'.join([consts, stub, func, call]),
+                             capture_output=True, text=True, check=True).stdout
+        return [tuple(p.split('|')) for p in out.splitlines()]
+
+    def test_ellipsize_cuts_whole_characters_across_runs(self):
+        runs = [('夜に駆ける', 'Noto Sans CJK JP'), (' feat. ', 'Ubuntu Sans')]
+        self.assertEqual(self.ellipsized(runs, 12), runs)                     # fits: as it is
+        self.assertEqual(self.ellipsized(runs, 8),
+                         [('夜に駆ける', 'Noto Sans CJK JP'), (' f', 'Ubuntu Sans'), ('…', 'Ubuntu Sans')])
+        # the second run emptied away, the cut goes on into the first
+        self.assertEqual(self.ellipsized(runs, 4), [('夜に駆', 'Noto Sans CJK JP'), ('…', 'Ubuntu Sans')])
+        self.assertEqual(self.ellipsized(runs, 0), [('…', 'Ubuntu Sans')])
 
 
 class DisplayTextTest(unittest.TestCase):
@@ -409,11 +434,19 @@ class FontRunsTest(unittest.TestCase):
         self.assertEqual(runs['feat.'], 'Ubuntu Sans')
         for cjk in ('千本桜', 'ミク'):
             self.assertNotEqual(runs[cjk], 'Ubuntu Sans')
-        self.assertEqual(nowplaying.conky_text('千本桜', self.FONT),
-                         f"${{font {runs['千本桜']}:bold:size=17}}千本桜")
+        cjk = nowplaying.font_runs('千本桜', self.FONT)
+        self.assertEqual(nowplaying.conky_text(cjk, self.FONT), f"${{font {runs['千本桜']}:bold:size=17}}千本桜")
         # conky's line is as tall as its tallest font, and CJK fonts stand taller
-        self.assertGreater(nowplaying.text_height('千本桜', self.FONT), nowplaying.line_height(self.FONT))
-        self.assertEqual(nowplaying.text_height('Title', self.FONT), nowplaying.line_height(self.FONT))
+        self.assertGreater(nowplaying.text_height(cjk, self.FONT), nowplaying.line_height(self.FONT))
+        latin = nowplaying.font_runs('Title', self.FONT)
+        self.assertEqual(nowplaying.text_height(latin, self.FONT), nowplaying.line_height(self.FONT))
+
+    def test_an_empty_line_still_sets_its_font(self):
+        # A title of nothing but format characters wraps to one empty line, which conky must
+        # still draw at the title font's height, as text_height counts it.
+        runs = nowplaying.font_runs(nowplaying.display_text('\u2060'), self.FONT)
+        self.assertEqual(nowplaying.conky_text(runs, self.FONT), f'${{font {nowplaying.conky_font(self.FONT)}}}')
+        self.assertEqual(nowplaying.text_height(runs, self.FONT), nowplaying.line_height(self.FONT))
 
 
 class FormattingTest(unittest.TestCase):
@@ -1122,6 +1155,13 @@ class WriteLyricsTest(support.TempDirTest):
         self.assertEqual(sum(sizes), len(text.encode()))
         self.assertNotEqual(families[0], 'Ubuntu Sans')
         self.assertEqual(families[-1], 'Ubuntu Sans')        # draw.lua draws the ♫ in Noto Music
+
+    def test_lines_fonts_are_only_worked_out_when_the_file_is_written(self):
+        lyrics = {'synced': [(1.0, '夜に駆ける'), (2.0, 'Second')]}
+        self.write(lyrics)
+        with mock.patch.object(nowplaying, 'lyric_line', side_effect=AssertionError) as line:
+            self.write(lyrics)
+        line.assert_not_called()
 
     def test_plain_lyrics_are_untimed_and_static(self):
         version, count, static = self.write({'plain': ['First', '', 'Second']})

@@ -183,9 +183,10 @@ def conky_font(pango_font, family=None):
     return f"{name}{':bold' if bold else ''}:size={size}"
 
 
-def conky_text(text, font):
-    """text as conky markup in font, each run in the font Pango draws it in (font_runs)."""
-    return ''.join(f"${{font {conky_font(font, family)}}}{esc(part)}" for family, part in font_runs(text, font))
+def conky_text(runs, font):
+    """font_runs(text, font) as conky markup, each run in its font. Empty text still sets
+    font, which conky counts into the line's height."""
+    return ''.join(f"${{font {conky_font(font, family)}}}{esc(part)}" for family, part in runs or [(None, '')])
 
 
 def playerctl(*args):
@@ -637,15 +638,15 @@ def line_height(*fonts):
     return max(_height(font_description(font)) for font in fonts)
 
 
-def text_height(text, font):
-    """Conky's height for a line of conky_text(text, font): its tallest run font's. Noto
+def text_height(runs, font):
+    """Conky's height for a line of conky_text(runs, font): its tallest run font's. Noto
     Sans CJK stands taller than Ubuntu Sans at the same size."""
-    heights = []
-    for family, _ in font_runs(text, font):
+    heights = [line_height(font)] if not runs else []
+    for family, _ in runs:
         description = font_description(font)
         description.set_family(family)
         heights.append(_height(description))
-    return max(heights, default=line_height(font))
+    return max(heights)
 
 
 def write_regions(regions):
@@ -850,12 +851,11 @@ def render():
     play_cx = prev_cx + SKIP_SIZE / 2 + CONTROL_GAP + PLAY_SIZE / 2
     next_cx = play_cx + PLAY_SIZE / 2 + CONTROL_GAP + SKIP_SIZE / 2
     time_x = next_cx + SKIP_SIZE / 2 + CONTROL_GAP + 4
-    for line in wrap(display_text(title), TITLE_FONT):
-        out.append(f"{g}${{lua_parse fg title}}{conky_text(line, TITLE_FONT)}{plain()}")
-        y += text_height(line, TITLE_FONT)
-    for line in wrap(display_text(artist), ARTIST_FONT, max_lines=2):
-        out.append(f"{g}${{lua_parse fg text}}{conky_text(line, ARTIST_FONT)}{plain()}")
-        y += text_height(line, ARTIST_FONT)
+    for text, font, colour, max_lines in ((title, TITLE_FONT, 'title', 3), (artist, ARTIST_FONT, 'text', 2)):
+        for line in wrap(display_text(text), font, max_lines=max_lines):
+            runs = font_runs(line, font)
+            out.append(f"{g}${{lua_parse fg {colour}}}{conky_text(runs, font)}{plain()}")
+            y += text_height(runs, font)
     # The play button's bottom meets the artwork's bottom, unless a title or artist wrapped
     # onto more lines than fit beside it: then the row, and the widget with it, moves down.
     # A line each of title and artist always fits (see header_scale_for), so the text scale
@@ -932,20 +932,22 @@ def write_lyrics(track_id, shown=True, static=False):
     lyrics = (state.lyrics or {}) if shown else {}
     synced = [(t, display_text(l).strip()) for t, l in lyrics.get('synced') or []]
     if synced and not static:
-        lines = synced
+        mode, lines = 'synced', synced
         if lines[0][0] > 0:
             lines.insert(0, (0.0, ''))           # before the first line: show the intro as ♫
-        mode, body = 'synced', '\n'.join(f'{t:.2f}\t{lyric_line(l or "♫")}' for t, l in lines)   # instrumental: ♫
     else:
         # untimed, the blank lines of instrumental breaks read as the gaps between verses
-        lines = plain_lines('\n'.join([l for _, l in synced] if synced
-                                      else [display_text(l) for l in lyrics.get('plain') or []]))
-        mode, body = 'static' if synced else 'plain', '\n'.join(f'\t{lyric_line(l)}' for l in lines)
+        mode = 'static' if synced else 'plain'
+        lines = [(None, l) for l in plain_lines('\n'.join(
+            [l for _, l in synced] if synced else [display_text(l) for l in lyrics.get('plain') or []]))]
     if not lines:
         state.lyrics_written = None              # the same lyrics coming back start at the top
         return None
     version = f'{abs(hash((track_id, mode, len(lines)))) % 10**8}'
     if state.lyrics_written != version:
+        # lyric_line asks Pango for each line's fonts, so only when the file is written
+        body = '\n'.join(f'{t:.2f}\t{lyric_line(l or "♫")}' if mode == 'synced'   # instrumental: ♫
+                         else f'\t{lyric_line(l)}' for t, l in lines)
         write_atomic(LYRICS, f"{'synced' if mode == 'synced' else 'plain'}\n{body}\n")
         try:
             os.remove(LYRICS_SCROLL)

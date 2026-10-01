@@ -387,13 +387,15 @@ local function each_part(runs, fn)
     end
 end
 
+local run_ext = cairo_text_extents_t:create()   -- advance's, which ellipsize calls a lot
+
 local function advance(cr, runs, weight)
     -- how far the runs reach, each in its font
-    local ext, w = cairo_text_extents_t:create(), 0
+    local w = 0
     each_part(runs, function(text, family)
         cairo_select_font_face(cr, family, CAIRO_FONT_SLANT_NORMAL, weight)
-        cairo_text_extents(cr, text, ext)
-        w = w + ext.x_advance
+        cairo_text_extents(cr, text, run_ext)
+        w = w + run_ext.x_advance
     end)
     return w
 end
