@@ -127,7 +127,9 @@ def wrap(text, font, width=None, max_lines=3):
 
 
 def esc(text):
-    return text.replace('$', '$$')
+    """text as conky draws it literally: '$' starts a variable and '#' a comment that runs
+    to the end of the line, taking the line's font with it, so both are escaped."""
+    return text.replace('$', '$$').replace('#', '\\#')
 
 
 def conky_font(pango_font):
@@ -163,6 +165,7 @@ state = State()
 
 LIGHT_FG, DARK_FG = (1.0, 1.0, 1.0), (0.07, 0.07, 0.07)   # draw.lua's two foregrounds
 MIN_CONTRAST = 60                         # APCA Lc: its floor for body text, like the lyrics
+FALLBACK_BG = (0x18 / 255,) * 3           # Spotify's #181818: no cover, or none of its colours usable
 
 
 def apca_y(rgb):
@@ -185,39 +188,34 @@ def contrast(text, bg):
     return 0.0 if sapc > -0.1 else -(sapc + 0.027) * 100
 
 
-def readable(rgb):
-    """rgb as it is when white or the dark foreground reaches MIN_CONTRAST on it (draw.lua
-    draws in whichever contrasts more). In the middle band where neither does, its lightness
-    moves only as far as one of them needs, towards whichever needs the smaller move."""
-    if max(contrast(LIGHT_FG, rgb), contrast(DARK_FG, rgb)) >= MIN_CONTRAST:
-        return rgb
-    h, l, s = colorsys.rgb_to_hls(*rgb)
-
-    def reach(fg, far):
-        # contrast with fg grows steadily from l towards far (0 for white text, 1 for dark)
-        near = l
-        for _ in range(30):
-            mid = (near + far) / 2
-            if contrast(fg, colorsys.hls_to_rgb(h, mid, s)) >= MIN_CONTRAST:
-                far = mid
-            else:
-                near = mid
-        return far
-
-    darker, lighter = reach(LIGHT_FG, 0.0), reach(DARK_FG, 1.0)
-    return colorsys.hls_to_rgb(h, darker if l - darker <= lighter - l else lighter, s)
+def usable(rgb):
+    """Whether white or the dark foreground reaches MIN_CONTRAST on rgb (draw.lua draws in
+    whichever contrasts more)."""
+    return max(contrast(LIGHT_FG, rgb), contrast(DARK_FG, rgb)) >= MIN_CONTRAST
 
 
-def typical(pixels):
-    """A colour really on the cover for a group of its pixels: of the pixels in the group's
-    densest RGB cell (8 levels a channel), the one nearest that cell's mean. A plain mean
-    across a hue slice can land on a colour no pixel has."""
+def glaring(rgb):
+    """Whether rgb is a vivid, bright colour that draw.lua would put white text on. White on a
+    saturated red or orange rates well in APCA but is hard to read, the colours vibrating
+    against each other."""
+    _, sat, v = colorsys.rgb_to_hsv(*rgb)
+    return sat >= 0.85 and v >= 0.75 and contrast(LIGHT_FG, rgb) > contrast(DARK_FG, rgb)
+
+
+def cell_colours(pixels, floor, strict=False):
+    """Colours really on the cover for a group of its pixels, most typical first: for each of
+    the group's RGB cells (8 levels a channel), densest first, the pixel nearest that cell's
+    mean. A plain mean across a hue slice can land on a colour no pixel has. Cells after the
+    first, and the first too when strict, need floor pixels, so a few stray ones are never
+    taken for the cover's colour."""
     cells = {}
     for p in pixels:
         cells.setdefault(tuple(int(c * 8) for c in p), []).append(p)
-    cell = max(cells.values(), key=len)
-    mean = [sum(c) / len(cell) for c in zip(*cell)]
-    return min(cell, key=lambda p: sum((a - b) ** 2 for a, b in zip(p, mean)))
+    for i, cell in enumerate(sorted(cells.values(), key=len, reverse=True)):
+        if (i or strict) and len(cell) < floor:
+            break
+        mean = [sum(c) / len(cell) for c in zip(*cell)]
+        yield min(cell, key=lambda p: sum((a - b) ** 2 for a, b in zip(p, mean)))
 
 
 def art_colour(path):
@@ -225,10 +223,18 @@ def art_colour(path):
     of the image, else its dominant colour), as a colour one of its pixels has. On a mostly
     grayscale cover, any small splash of colour beats the gray/black, and a grayish or
     near-black dominant colour loses to the cover's main hue once colour fills 10% of it.
-    The colour is used as it is, apart from readable()'s nudge in the middle band."""
+    A bright colour on a mostly dark cover (60% of it under a third of full value), like a
+    band of light in the dark, gives way to the same colour a value band deeper, where the
+    cover has enough of it.
+
+    The colour is used as it is, never shifted. When neither foreground reaches MIN_CONTRAST
+    on it, the next colour on the cover is tried: the same group's other shades, then the
+    cover's other colour groups of floor pixels or more, biggest first. A glaring colour
+    gives way to the cover's own black or gray instead (never its white), its most common
+    usable one. A cover with no usable colour gets FALLBACK_BG."""
     pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 48, 48, False)
     n, stride, px = pb.get_n_channels(), pb.get_rowstride(), pb.get_pixels()
-    buckets, accents, total, neutral = {}, {}, 0, 0
+    buckets, accents, pixels, neutrals = {}, {}, [], []
     for yy in range(pb.get_height()):
         for xx in range(pb.get_width()):
             i = yy * stride + xx * n
@@ -237,32 +243,54 @@ def art_colour(path):
             key = (int(h * 12), int(sat * 3), int(v * 3))
             tot = buckets.setdefault(key, [0, 0.0, 0.0, 0.0, sat >= 0.35 and v >= 0.3, []])
             tot[0] += 1; tot[1] += r; tot[2] += g; tot[3] += b; tot[5].append((r, g, b))
-            total += 1
+            pixels.append(((r, g, b), h, sat, v))
             if sat < 0.15 or v < 0.15:           # gray, or too dark for its hue to mean much
-                neutral += 1
+                neutrals.append((r, g, b))
             elif sat >= 0.25 and v >= 0.2:       # accent candidates, grouped by hue only
                 acc = accents.setdefault(int(h * 12 + 0.5) % 12, [0, 0.0, 0.0, 0.0, False, []])
                 acc[0] += 1; acc[1] += r; acc[2] += g; acc[3] += b; acc[5].append((r, g, b))
+    total = len(pixels)
     accent = max(accents.values(), default=None)
     vivid = [t for t in buckets.values() if t[4]]
     dominant = max(buckets.values())
     _, dsat, dv = colorsys.rgb_to_hsv(*(c / dominant[0] for c in dominant[1:4]))
-    if neutral >= 0.85 * total and accent and accent[0] >= 0.004 * total:
-        best = accent                            # ~9px floor keeps JPEG noise from winning
+    floor = 0.004 * total                        # ~9px keeps JPEG noise from winning
+    if len(neutrals) >= 0.85 * total and accent and accent[0] >= floor:
+        best = accent
     elif vivid and max(vivid)[0] >= 0.05 * total:
         best = max(vivid)
     elif (dsat < 0.25 or dv < 0.2) and sum(a[0] for a in accents.values()) >= 0.10 * total:
         best = accent                            # a dominant colour too faint to be an accent loses
     else:
         best = dominant
-    return readable(typical(best[5]))
+    others = sorted((t for t in buckets.values() if t is not best and t[0] >= floor),
+                    key=lambda t: t[0], reverse=True)
+    groups = [best[5], *(t[5] for t in others)]
+    h, sat, v = colorsys.rgb_to_hsv(*next(cell_colours(best[5], floor)))
+    dark = sum(1 for *_, pv in pixels if pv < 1 / 3)
+    if dark >= 0.6 * total and sat >= 0.25 and v >= 2 / 3:
+        hue, band = int(h * 12 + 0.5) % 12, min(int(sat * 3), 2)
+        deeper = [p for p, ph, ps, pv in pixels
+                  if int(ph * 12 + 0.5) % 12 == hue and min(int(ps * 3), 2) == band
+                  and ps >= 0.25 and 1 / 3 <= pv < 2 / 3]
+        if len(deeper) >= 0.02 * total:
+            groups.insert(0, deeper)
+    for group in groups:
+        for rgb in cell_colours(group, floor):
+            if glaring(rgb):
+                grays = [p for p in neutrals if max(p) < 0.6]   # black and grays, not white
+                return next((c for c in cell_colours(grays, floor, strict=True) if usable(c)),
+                            FALLBACK_BG)
+            if usable(rgb):
+                return rgb
+    return FALLBACK_BG
 
 
 def update_bg():
     try:
         r, g, b = art_colour(COVER)
     except Exception:
-        r, g, b = 0.094, 0.094, 0.094   # Spotify's #181818
+        r, g, b = FALLBACK_BG
     write_atomic(BG, f'{r:.3f} {g:.3f} {b:.3f}\n')
 
 

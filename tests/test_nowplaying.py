@@ -63,13 +63,13 @@ class ArtColourTest(support.TempDirTest):
         self.assertAlmostEqual(g, b, places=6)
 
     def test_colourful_cover_takes_the_dominant_vivid_colour(self):
-        green, magenta = (40, 180, 60), (200, 40, 180)
+        green, magenta = (30, 130, 50), (200, 40, 180)
         path = self.cover(lambda x, y: green if y < 34 else magenta)
         self.assertHue(path, green)
 
     def test_small_vivid_patch_beats_a_dull_dominant_colour(self):
         # A dull brown cover (not grayscale) with a vivid orange block over 5% of it.
-        orange = (240, 130, 20)
+        orange = (180, 80, 10)
         path = self.cover(lambda x, y: orange if x < 12 and y < 12 else (90, 75, 60))
         self.assertHue(path, orange)
 
@@ -95,36 +95,113 @@ class ArtColourTest(support.TempDirTest):
 
     def test_the_colour_is_a_pixel_on_the_cover(self):
         # A hue slice spread from dark to bright: its mean would be a colour no pixel has.
-        shades = [(240, 90, 10), (120, 40, 5), (250, 110, 30), (235, 85, 12)]
+        shades = [(180, 70, 8), (120, 40, 5), (190, 85, 25), (175, 65, 10)]
         path = self.cover(lambda x, y: shades[(x + y) % 4] if x < 30 else (10, 10, 10))
         pixel = tuple(round(c * 255) for c in nowplaying.art_colour(path))
         self.assertIn(pixel, shades)
 
-    def test_a_vivid_orange_is_used_as_it_is_with_white_text(self):
-        # The Somebody Better cover's orange-red: white text reaches Lc 60 on it, so no nudge.
-        # (WCAG 2's ratio would pick dark text here, which reads poorly on it.)
-        orange = (0xe2, 0x47, 0x07)
-        rgb = nowplaying.art_colour(self.cover(lambda x, y: orange))
-        self.assertEqual(tuple(round(c * 255) for c in rgb), orange)
-        self.assertGreater(nowplaying.contrast(nowplaying.LIGHT_FG, rgb),
-                           nowplaying.contrast(nowplaying.DARK_FG, rgb))
+    def test_a_vivid_orange_under_white_text_is_glaring(self):
+        # The Somebody Better cover's orange-red: white reaches Lc 60 on it and contrasts more
+        # than dark text, yet it is hard on the eyes, so it is not used as the backdrop.
+        orange = (0xe2 / 255, 0x47 / 255, 0x07 / 255)
+        self.assertTrue(nowplaying.usable(orange))
+        self.assertGreater(nowplaying.contrast(nowplaying.LIGHT_FG, orange),
+                           nowplaying.contrast(nowplaying.DARK_FG, orange))
+        self.assertTrue(nowplaying.glaring(orange))
 
     def test_a_light_colour_gets_dark_text(self):
         yellow = (250 / 255, 225 / 255, 60 / 255)
         self.assertGreater(nowplaying.contrast(nowplaying.DARK_FG, yellow),
                            nowplaying.contrast(nowplaying.LIGHT_FG, yellow))
 
-    def test_a_middle_band_colour_moves_only_as_far_as_it_needs(self):
-        # Spotify green: neither white nor the dark foreground reaches Lc 60 on it.
-        green = (0x1e / 255, 0xb9 / 255, 0x54 / 255)
-        self.assertLess(max(nowplaying.contrast(fg, green)
-                            for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG)),
-                        nowplaying.MIN_CONTRAST)
-        rgb = nowplaying.readable(green)
-        best = max(nowplaying.contrast(fg, rgb) for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
-        self.assertAlmostEqual(best, nowplaying.MIN_CONTRAST, places=2)
-        self.assertLess(max(abs(a - b) for a, b in zip(rgb, green)), 0.05)
-        self.assertAlmostEqual(colorsys.rgb_to_hls(*rgb)[0], colorsys.rgb_to_hls(*green)[0], places=6)
+    def pixels(self, path):
+        pb = GdkPixbuf.Pixbuf.new_from_file(path)
+        data, n, stride = pb.get_pixels(), pb.get_n_channels(), pb.get_rowstride()
+        return {tuple(data[y * stride + x * n:y * stride + x * n + 3]) for y in range(SIZE) for x in range(SIZE)}
+
+    def picked(self, path):
+        return tuple(round(c * 255) for c in nowplaying.art_colour(path))
+
+    def test_a_middle_band_first_pick_gives_way_to_the_next_colour_on_the_cover(self):
+        # Spotify green: neither white nor the dark foreground reaches Lc 60 on it, so the
+        # navy under it is used as it is rather than a darkened green.
+        green, navy = (0x1e, 0xb9, 0x54), (5, 10, 60)
+        self.assertFalse(nowplaying.usable([c / 255 for c in green]))
+        path = self.cover(lambda x, y: green if y < 34 else navy)
+        self.assertEqual(self.picked(path), navy)
+
+    def test_a_dark_cover_with_a_band_of_light_takes_a_shade_the_band_has(self):
+        # Mostly black and dark red silhouettes, with a band of red light whose glow is in
+        # the middle band: the band's deeper red is used, never the glow made darker.
+        black, silhouette = (8, 6, 6), (0x24, 0x08, 0x08)
+        glow, red = (250, 120, 110), (0x80, 0x18, 0x14)
+        self.assertFalse(nowplaying.usable([c / 255 for c in glow]))
+        rows = [black] * 24 + [silhouette] * 18 + [glow] * 4 + [red] * 2
+        path = self.cover(lambda x, y: rows[y])
+        self.assertEqual(self.picked(path), red)
+
+    def test_a_bright_colour_on_a_dark_cover_gives_way_to_its_deeper_shade(self):
+        # High In Low Places: red light over dark silhouettes. Its bright red is usable, but
+        # the deep red the cover also has is what most of it reads as.
+        black, bright, deep = (12, 12, 11), (204, 34, 35), (145, 29, 29)
+        rows = [black] * 32 + [bright] * 10 + [deep] * 6
+        self.assertEqual(self.picked(self.cover(lambda x, y: rows[y])), deep)
+
+    def test_a_bright_colour_stays_when_the_cover_is_not_mostly_dark(self):
+        gray, bright, deep = (128, 128, 128), (204, 34, 35), (145, 29, 29)
+        rows = [gray] * 20 + [bright] * 20 + [deep] * 8
+        self.assertEqual(self.picked(self.cover(lambda x, y: rows[y])), bright)
+
+    def test_a_light_gray_pick_on_a_mostly_neutral_cover_takes_no_deeper_shade(self):
+        # White and a pale beige, with a little dull red: white is neutral but not dark,
+        # and a gray has no hue for a deeper shade to share.
+        white, beige, dull = (250, 250, 250), (230, 210, 184), (128, 96, 90)
+        rows = [white] * 34 + [beige] * 12 + [dull] * 2
+        self.assertEqual(self.picked(self.cover(lambda x, y: rows[y])), white)
+
+    def test_a_deeper_shade_too_scarce_to_count_is_passed_over(self):
+        black, bright, deep = (12, 12, 11), (204, 34, 35), (145, 29, 29)
+        path = self.cover(lambda x, y: deep if y == 47 and x < 20 else bright if y >= 38 else black)
+        self.assertEqual(self.picked(path), bright)
+
+    def test_a_glaring_red_gives_way_to_a_gray_on_the_cover(self):
+        # Fistful Of Money: a saturated red under white text, with dark gray figures on it.
+        red, gray, white = (211, 5, 1), (78, 77, 76), (250, 250, 250)
+        self.assertTrue(nowplaying.glaring([c / 255 for c in red]))
+        rows = [red] * 30 + [gray] * 10 + [white] * 8
+        self.assertEqual(self.picked(self.cover(lambda x, y: rows[y])), gray)
+
+    def test_a_glaring_orange_with_only_white_beside_it_gets_the_fallback(self):
+        orange, white = (0xe4, 0x4a, 0x02), (250, 250, 250)
+        path = self.cover(lambda x, y: orange if y < 36 else white)
+        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+
+    def test_a_glaring_colour_never_gives_way_to_a_stray_gray_pixel(self):
+        # Bloodlines: orange and pale cyan lettering, with a gray only in a pixel or two.
+        orange, cyan, gray = (252, 74, 11), (190, 240, 245), (150, 138, 131)
+        path = self.cover(lambda x, y: gray if x < 2 and y == 0 else cyan if y >= 36 else orange)
+        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+
+    def test_a_vivid_colour_under_dark_text_is_not_glaring(self):
+        for rgb in ((0x09, 0xc9, 0xfe), (0xff, 0xd8, 0x3f), (0x2a, 0xfa, 0xa8)):
+            with self.subTest(rgb):
+                self.assertFalse(nowplaying.glaring([c / 255 for c in rgb]))
+                self.assertEqual(self.picked(self.cover(lambda x, y: rgb)), rgb)
+
+    def test_a_deep_red_under_white_text_is_not_glaring(self):
+        self.assertFalse(nowplaying.glaring([0x91 / 255, 0x1d / 255, 0x1d / 255]))
+
+    def test_a_cover_with_no_usable_colour_gets_the_fallback(self):
+        green, glow = (0x1e, 0xb9, 0x54), (250, 120, 110)
+        path = self.cover(lambda x, y: green if y < 30 else glow)
+        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
+        self.assertEqual(self.picked(path), (0x18, 0x18, 0x18))
+
+    def test_stray_pixels_are_not_taken_for_the_cover_colour(self):
+        # A few navy pixels, under the noise floor, on a cover whose only colour is unusable.
+        green, navy = (0x1e, 0xb9, 0x54), (5, 10, 60)
+        path = self.cover(lambda x, y: navy if x < 2 and y < 2 else green)
+        self.assertEqual(nowplaying.art_colour(path), nowplaying.FALLBACK_BG)
 
     def test_a_foreground_always_reaches_the_minimum_contrast(self):
         covers = {
@@ -139,10 +216,13 @@ class ArtColourTest(support.TempDirTest):
         }
         for name, pixel in covers.items():
             with self.subTest(name):
-                rgb = nowplaying.art_colour(self.cover(pixel))
+                path = self.cover(pixel)
+                rgb = nowplaying.art_colour(path)
                 best = max(nowplaying.contrast(fg, rgb)
                            for fg in (nowplaying.LIGHT_FG, nowplaying.DARK_FG))
-                self.assertGreaterEqual(best, nowplaying.MIN_CONTRAST - 1e-6)
+                self.assertGreaterEqual(best, nowplaying.MIN_CONTRAST)
+                if rgb != nowplaying.FALLBACK_BG:
+                    self.assertIn(self.picked(path), self.pixels(path))
 
     def test_update_bg_falls_back_to_spotify_gray_without_a_cover(self):
         self.redirect(nowplaying, COVER='missing.jpg', BG='bg.txt')
@@ -153,7 +233,7 @@ class ArtColourTest(support.TempDirTest):
 @unittest.skipUnless(shutil.which('lua5.3'), 'lua5.3 is not installed')
 class LuaContrastTest(unittest.TestCase):
     """draw.lua picks the foreground with its own copy of contrast(); it must agree with the
-    one nowplaying.py nudges backgrounds with, or text lands on the wrong side of the floor."""
+    one nowplaying.py picks backgrounds with, or text lands on the wrong side of the floor."""
 
     def test_draw_lua_contrast_matches_nowplaying(self):
         with open(os.path.join(support.SRC, 'draw.lua')) as f:
@@ -213,6 +293,10 @@ class FormattingTest(unittest.TestCase):
         self.assertEqual(nowplaying.esc('$5 and $$'), '$$5 and $$$$')
         self.assertEqual(nowplaying.esc('no dollars'), 'no dollars')
 
+    def test_esc_escapes_hashes_so_conky_does_not_read_a_comment(self):
+        self.assertEqual(nowplaying.esc('#5'), '\\#5')
+        self.assertEqual(nowplaying.esc('C# $1 ##'), 'C\\# $$1 \\#\\#')
+
     def test_fmt_time(self):
         cases = {0: '0:00', 5: '0:05', 59.9: '0:59', 65: '1:05', 600: '10:00', 3725: '62:05'}
         for sec, want in cases.items():
@@ -242,9 +326,9 @@ class WindowButtonsTest(support.TempDirTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def render(self, status):
+    def render(self, status, title='Title', artist='Artist'):
         answers = {'status': status,
-                   'metadata': 'track1\tTitle\tArtist\tAlbum\t\t10000000\t200000000'}
+                   'metadata': f'track1\t{title}\t{artist}\tAlbum\t\t10000000\t200000000'}
         with mock.patch.object(nowplaying, 'playerctl', side_effect=lambda cmd, *_: answers[cmd]), \
                 mock.patch.object(nowplaying.threading, 'Thread'), \
                 mock.patch.object(nowplaying.spotify_api, 'write_liked'):
@@ -254,6 +338,14 @@ class WindowButtonsTest(support.TempDirTest):
 
     def assert_left_of(self, a, b):
         self.assertLessEqual(a[2], b[0], f'{a} overlaps or is right of {b}')
+
+    def test_a_hash_in_the_title_or_artist_reaches_conky_escaped(self):
+        # Unescaped, conky reads '#5' to the end of its line as a comment, title and font.
+        text, _, _ = self.render('Playing', title='#5', artist='C# Collective')
+        title_font = nowplaying.conky_font(nowplaying.TITLE_FONT)
+        self.assertIn(f'${{font {title_font}}}\\#5${{font', text)
+        self.assertIn('C\\# Collective${font', text)
+        self.assertNotRegex(text, r'(?<!\\)#')
 
     def test_heart_minimize_close_run_left_to_right_without_overlapping(self):
         text, regions, draw = self.render('Playing')
@@ -852,6 +944,11 @@ class WriteLyricsTest(support.TempDirTest):
         version, count, static = self.write({'synced': [(1.5, 'First'), (4.0, '')]})
         self.assertEqual(support.read(nowplaying.LYRICS), 'synced\n0.00\t♫\n1.50\tFirst\n4.00\t♫\n')
         self.assertEqual((count, static), (3, False))
+
+    def test_a_hash_in_a_lyric_line_is_written_as_it_is(self):
+        # draw.lua draws lyrics.txt with cairo, so conky never reads its lines as markup.
+        self.write({'synced': [(0.0, '#1 on the chart'), (2.0, 'C# minor')]})
+        self.assertEqual(support.read(nowplaying.LYRICS), 'synced\n0.00\t#1 on the chart\n2.00\tC# minor\n')
 
     def test_plain_lyrics_are_untimed_and_static(self):
         version, count, static = self.write({'plain': ['First', '', 'Second']})
