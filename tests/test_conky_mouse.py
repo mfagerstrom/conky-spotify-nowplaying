@@ -184,6 +184,67 @@ class ResizeEdgesTest(unittest.TestCase):
                                                       for y in (0, H, 2 * H - 1)} - {''})
 
 
+class CardTest(unittest.TestCase):
+
+    def test_the_card_is_the_window_less_the_shadow_on_every_side(self):
+        m = conky_mouse.SHADOW
+        self.assertEqual(conky_mouse.card_of((100, 200, W, H), 1), (100 + m, 200 + m, W - 2 * m, H - 2 * m))
+        self.assertEqual(conky_mouse.card_of((100, 200, W, H), 2),
+                         (100 + 2 * m, 200 + 2 * m, W - 4 * m, H - 4 * m))
+        for s in (1, 2):
+            self.assertEqual(conky_mouse.window_of(conky_mouse.card_of((100, 200, W, H), s), s),
+                             (100, 200, W, H))
+
+    def test_the_shadow_is_off_the_card(self):
+        self.assertTrue(conky_mouse.on_card(0, 0, W, H))
+        self.assertTrue(conky_mouse.on_card(W - 1, H - 1, W, H))
+        for x, y in ((-1, 10), (10, -1), (W, 10), (10, H)):
+            with self.subTest(x=x, y=y):
+                self.assertFalse(conky_mouse.on_card(x, y, W, H))
+
+    def test_the_arrow_has_a_cursor_of_its_own(self):
+        self.assertIn('', conky_mouse.CURSORS)
+
+
+class CardPlacementTest(unittest.TestCase):
+    # At scale 2 the window has 32 px of shadow on every side of the card.
+    MON = (0, 0, 3840, 2160)
+
+    def patch(self, **values):
+        for name, value in values.items():
+            patcher = mock.patch.object(conky_mouse, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_drag_saves_where_the_card_ends_up(self):
+        self.patch(geometry=mock.Mock(side_effect=[(100, 200, 1304, 730), (500, 600, 1304, 730)]),
+                   pointer=mock.Mock(return_value=(0, 0, 0)), monitor_for=mock.Mock(return_value=self.MON),
+                   log=mock.Mock())
+        self.assertEqual(conky_mouse.drag(None, 0, 1, 2), (532, 632, 1240, 666))
+
+    def test_a_resize_moves_the_window_round_the_resized_card_and_saves_the_card(self):
+        # Dragging the left edge 100 px left at scale 2 widens the card by 100 and moves it left.
+        moves = []
+        old, new = (505, 63, 1.0), (555, 63, 1.0)
+        # the window at the start, then conky's at the new size, then moved, as long as asked
+        geometries = [(1000, 100, 1304, 730), (1000, 100, 1404, 730), (900, 100, 1404, 730)]
+        self.patch(geometry=mock.Mock(side_effect=lambda d, w: geometries.pop(0) if len(geometries) > 1
+                                      else geometries[0]),
+                   pointer=mock.Mock(side_effect=[(500, 300, conky_mouse.BUTTON1_MASK),
+                                                  (400, 300, conky_mouse.BUTTON1_MASK), (400, 300, 0)]),
+                   monitor_for=mock.Mock(return_value=self.MON), log=mock.Mock(), outline=mock.Mock(return_value=[]),
+                   place_outline=mock.Mock(), cover=mock.Mock(), uncover=mock.Mock(),
+                   set_input_shape=mock.Mock(), x11=mock.Mock(XMoveWindow=lambda d, w, x, y: moves.append((x, y))))
+        self.patch(widget_size=mock.Mock(load=mock.Mock(return_value=old), save=mock.Mock(),
+                                         clamp=conky_mouse.widget_size.clamp, LIMITS=conky_mouse.widget_size.LIMITS))
+        placed = conky_mouse.resize(None, 0, 1, 'l', 2, {'lyrics': [0, 0, 1, 1]})
+        conky_mouse.widget_size.save.assert_called_once_with(new)
+        conky_mouse.place_outline.assert_called_with(None, [], 932, 132, 1340, 666, 4)   # the card
+        self.assertEqual(moves, [(900, 100)])                                           # the window
+        conky_mouse.set_input_shape.assert_called_once_with(None, 1, 1404, 730, 2)
+        self.assertEqual(placed, (932, 132, 1340, 666))
+
+
 class DraggedTest(unittest.TestCase):
     ROOM = 10 ** 6            # the monitor's room left over; most tests stay well inside it
 

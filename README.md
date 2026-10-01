@@ -9,7 +9,8 @@ A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Co
 - Smoothly scrolling synced lyrics from [LRCLIB](https://lrclib.net), as many lines as the widget
   is tall, fading out at the top and bottom once five or more show
 - Plain lyrics for a track LRCLIB has no synced lyrics for: a static block from the first line,
-  every line alike, that you scroll with the mouse wheel over it
+  every line alike, that you scroll with the mouse wheel over it. When they run longer than
+  the lyrics area, a slim scrollbar on its right shows how far down you are
 - A placeholder cover while Spotify's DJ talks between songs (or any track without artwork)
 - Background colour taken from the album art as it is, fading between tracks; the text and
   controls turn dark on a light background. On a mostly dark cover, a bright colour such as
@@ -18,6 +19,8 @@ A Spotify "now playing" desktop widget for Linux (GNOME on Wayland), built on Co
   the cover is used instead, never a lightened or darkened one. A vivid, bright colour that
   would carry white text, like a saturated red or orange, gives way to a black or gray from
   the cover. A cover with no such colour gets Spotify's dark gray (#181818)
+- A rounded card with a soft drop shadow, so it stands out from any wallpaper. Clicks on the
+  shadow go through to whatever is under it
 - Drag the widget anywhere, on any monitor; its position is remembered. Plugging in or
   unplugging a monitor keeps it where it was on its own monitor, at the same size, or moves
   it onto the nearest one while its own is unplugged
@@ -200,8 +203,9 @@ Settings live in `~/.config/conky-spotify-nowplaying/` (`position`, `size`, `on-
 - Lyrics coverage depends on LRCLIB. Synced lyrics are always preferred, and scroll along
   with the song, the current line bold in the middle. A track with only plain (untimed)
   lyrics shows them from the top without following the song: scroll them with the mouse
-  wheel over the lyrics, a line per step, between the first and the last line. They start
-  at the top again on the next track. Lyrics scrolling set to Static shows synced lyrics
+  wheel over the lyrics, a line per step, between the first and the last line, with a
+  scrollbar on the right when they don't all fit. They start at the top again on the next
+  track. Lyrics scrolling set to Static shows synced lyrics
   the same way. Each track's lyrics are
   cached in `~/.cache/conky-spotify-nowplaying/lyrics/` (up to 2000 tracks, the least
   recently played dropped first), so a track played again, or after a restart, shows them
